@@ -681,9 +681,25 @@
             if (input.files && input.files[0]) {
                 const reader = new FileReader();
                 reader.onload = function(e) {
-                    document.getElementById('imgPreview').src = e.target.result;
-                    document.getElementById('imgPreview').style.display = 'block';
-                    document.getElementById('fileLabel').style.display = 'none';
+                    const img = new Image();
+                    img.onload = function() {
+                        const MAX_W = 400, MAX_H = 500;
+                        let w = img.width, h = img.height;
+                        if (w > MAX_W || h > MAX_H) {
+                            const ratio = Math.min(MAX_W / w, MAX_H / h);
+                            w = Math.round(w * ratio);
+                            h = Math.round(h * ratio);
+                        }
+                        const canvas = document.createElement('canvas');
+                        canvas.width = w;
+                        canvas.height = h;
+                        canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+                        const compressed = canvas.toDataURL('image/jpeg', 0.82);
+                        document.getElementById('imgPreview').src = compressed;
+                        document.getElementById('imgPreview').style.display = 'block';
+                        document.getElementById('fileLabel').style.display = 'none';
+                    };
+                    img.src = e.target.result;
                 };
                 reader.readAsDataURL(input.files[0]);
             }
@@ -860,7 +876,7 @@
         }
 
         async function uploadProfileImageIfNeeded(profileImg, certId) {
-            if (!profileImg || profileImg.includes('user-default.png')) return 'https://apps.balady.gov.sa/BALADYCDN/Content/images/user-default.png';
+            if (!profileImg || profileImg.includes('user-default.png') || !profileImg.startsWith('data:')) return '';
             if (!profileImg.startsWith('data:')) return profileImg;
             
             if (window.firebaseDisabled || !window.storage) {
@@ -880,10 +896,13 @@
 
         let editingCertId = null;
 
-        certForm.addEventListener('submit', (e) => {
+        certForm.addEventListener('submit', async (e) => {
             e.preventDefault();
 
-            const profileImg = document.getElementById('imgPreview').src;
+            const imgPreviewEl = document.getElementById('imgPreview');
+            const profileImg = (imgPreviewEl.style.display !== 'none' && imgPreviewEl.src && imgPreviewEl.src.startsWith('data:'))
+                ? imgPreviewEl.src
+                : '';
             const selectedAmanahName = document.getElementById('cert_amanah').value;
             const selectedAmanah = dropdownData.amanah.find(a => a.name === selectedAmanahName);
             const amanahLogo = selectedAmanah ? selectedAmanah.logo : '';
@@ -925,9 +944,22 @@
             const wasEditing = isEditing;
             editingCertId = null;
             const submitBtn = certForm.querySelector('button[type="submit"]');
-            if (submitBtn) submitBtn.textContent = '✨ إنشاء الشهادة';
+            if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = '⏳ جاري الحفظ...'; }
             const cancelBtn = document.getElementById('cancelEditBtn');
             if (cancelBtn) cancelBtn.style.display = 'none';
+
+            try {
+                if (wasEditing) {
+                    await api.updateCertificate(newCert.id, newCert);
+                } else {
+                    await api.saveCertificate(newCert);
+                }
+                console.log('Saved to server:', newCert.certNumber);
+            } catch (e) {
+                console.error('Server save failed:', e);
+            }
+
+            if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = '✨ إنشاء الشهادة'; }
 
             certForm.reset();
             document.getElementById('imgPreview').style.display = 'none';
@@ -936,20 +968,6 @@
             document.getElementById('cert_certNumber').value = generateCertNumber();
 
             displayCertificates();
-
-            // Save to server in background
-            (async () => {
-                try {
-                    if (wasEditing) {
-                        await api.updateCertificate(newCert.id, newCert);
-                    } else {
-                        await api.saveCertificate(newCert);
-                    }
-                    console.log('Saved to server:', newCert.certNumber);
-                } catch (e) {
-                    console.error('Server save failed:', e);
-                }
-            })();
 
             if (wasEditing) {
                 openAlertModal('تم التحديث', 'تم تحديث بيانات الشهادة بنجاح.');

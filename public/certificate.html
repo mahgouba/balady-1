@@ -458,7 +458,7 @@
 
                 <!-- Photo & QR -->
                 <div class="photo-container">
-                    <img id="data-photo" src="https://apps.balady.gov.sa/BALADYCDN/Content/images/user-default.png" alt="Profile">
+                    <img id="data-photo" src="background/default-profile.svg" alt="Profile">
                 </div>
 
                 <div class="qr-container" id="qrcode"></div>
@@ -621,15 +621,17 @@
                     }
 
                     const profileImgEl = document.getElementById('data-photo');
+                    const DEFAULT_PHOTO = 'background/default-profile.svg';
                     profileImgEl.onerror = () => {
-                        console.error('Profile image failed to load, using default');
-                        profileImgEl.src = 'https://apps.balady.gov.sa/BALADYCDN/Content/images/user-default.png';
-                        profileImgEl.onerror = null; // Prevent infinite loop if default also fails
+                        profileImgEl.src = DEFAULT_PHOTO;
+                        profileImgEl.onerror = null;
                     };
-                    if (cert.profileImage) {
+                    if (cert.profileImage && cert.profileImage.startsWith('data:')) {
+                        profileImgEl.src = cert.profileImage;
+                    } else if (cert.profileImage && !cert.profileImage.includes('user-default.png')) {
                         profileImgEl.src = cert.profileImage;
                     } else {
-                        profileImgEl.src = 'https://apps.balady.gov.sa/BALADYCDN/Content/images/user-default.png';
+                        profileImgEl.src = DEFAULT_PHOTO;
                     }
 
                     // توليد QR Code يوجه إلى صفحة التحقق على الاستضافة الحالية
