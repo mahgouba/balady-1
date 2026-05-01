@@ -547,78 +547,71 @@
                 localStorage.setItem('certificates', JSON.stringify(certificates));
             }
 
+            // أطلق استعلام Neon فوراً بالتوازي مع البحث في LocalStorage
+            const neonPromise = (typeof sql !== 'undefined') ? sql`
+                SELECT id, amanah, amanah_logo, municipality, municipality_logo,
+                       name, id_number, gender, nationality, cert_number, job,
+                       issue_date_hijri, issue_date_gregorian, expiry_date_hijri, expiry_date_gregorian,
+                       profile_image, establishment_name, establishment_number,
+                       license_number, program_type, program_end_date, created_at
+                FROM certificates
+                WHERE id = ${id} OR cert_number = ${id}
+                LIMIT 1
+            `.catch(() => null) : Promise.resolve(null);
+
             try {
-                // 1. Try LocalStorage first for fastest load
+                // 1. Cache فردي في LocalStorage - فوري
                 if (!cert) {
-                    // Try individual cache keys
-                    const cacheKeysToTry = [
-                        'cert_cache_' + id,
-                        'cert_cache_' + id.replace(/[^0-9]/g, '')
-                    ];
-                    for (const cacheKey of cacheKeysToTry) {
+                    for (const key of ['cert_cache_' + id, 'cert_cache_' + id.replace(/[^0-9]/g, '')]) {
                         try {
-                            const cached = localStorage.getItem(cacheKey);
+                            const cached = localStorage.getItem(key);
                             if (cached) {
                                 const data = JSON.parse(cached);
-                                const now = Date.now();
-                                // Use cache if it's less than 24 hours old
-                                if (now - data.timestamp < 24 * 60 * 60 * 1000) {
+                                if (Date.now() - data.timestamp < 24 * 60 * 60 * 1000) {
                                     cert = data.certificate;
-                                    console.log('Loaded from LocalStorage cache (individual key)');
                                     break;
                                 }
                             }
-                        } catch (e) {
-                            console.warn('Failed to read cache key:', cacheKey, e);
-                        }
+                        } catch (e) {}
                     }
                 }
 
-                // 2. Try certificates array in LocalStorage
+                // 2. مصفوفة certificates في LocalStorage - فوري
                 if (!cert) {
                     const certificates = JSON.parse(localStorage.getItem('certificates') || '[]');
                     cert = certificates.find(c => String(c.id) === String(id) || String(c.certNumber) === String(id));
-                    if (cert) console.log('Loaded from LocalStorage certificates array');
                 }
 
-                // 3. Try Neon Postgres if not found in LocalStorage
-                if (!cert && typeof sql !== 'undefined') {
-                    try {
-                        const results = await sql`SELECT * FROM certificates WHERE id = ${id} OR cert_number = ${id} LIMIT 1`;
-                        console.log('Neon results:', results);
-                        if (results && results.length > 0) {
-                            const row = results[0];
-                            // Map snake_case to camelCase
-                            cert = {
-                                id: row.id,
-                                amanah: row.amanah,
-                                amanahLogo: row.amanah_logo,
-                                municipality: row.municipality,
-                                municipalityLogo: row.municipality_logo,
-                                name: row.name,
-                                idNumber: row.id_number,
-                                gender: row.gender,
-                                nationality: row.nationality,
-                                certNumber: row.cert_number,
-                                job: row.job,
-                                issueDateHijri: row.issue_date_hijri,
-                                issueDateGregorian: row.issue_date_gregorian,
-                                expiryDateHijri: row.expiry_date_hijri,
-                                expiryDateGregorian: row.expiry_date_gregorian,
-                                profileImage: row.profile_image,
-                                establishmentName: row.establishment_name,
-                                establishmentNumber: row.establishment_number,
-                                licenseNumber: row.license_number,
-                                programType: row.program_type,
-                                programEndDate: row.program_end_date,
-                                createdAt: row.created_at
-                            };
-                            console.log('Mapped cert object:', cert);
-                            console.log('Loaded from Neon Postgres');
-                            saveCertToCache(cert);
-                        }
-                    } catch (e) {
-                        console.error('Neon load failed:', e);
+                // 3. Neon - الاستعلام كان يعمل بالتوازي، await للنتيجة فقط
+                if (!cert) {
+                    const results = await neonPromise;
+                    if (results && results.length > 0) {
+                        const row = results[0];
+                        cert = {
+                            id: row.id,
+                            amanah: row.amanah,
+                            amanahLogo: row.amanah_logo,
+                            municipality: row.municipality,
+                            municipalityLogo: row.municipality_logo,
+                            name: row.name,
+                            idNumber: row.id_number,
+                            gender: row.gender,
+                            nationality: row.nationality,
+                            certNumber: row.cert_number,
+                            job: row.job,
+                            issueDateHijri: row.issue_date_hijri,
+                            issueDateGregorian: row.issue_date_gregorian,
+                            expiryDateHijri: row.expiry_date_hijri,
+                            expiryDateGregorian: row.expiry_date_gregorian,
+                            profileImage: row.profile_image,
+                            establishmentName: row.establishment_name,
+                            establishmentNumber: row.establishment_number,
+                            licenseNumber: row.license_number,
+                            programType: row.program_type,
+                            programEndDate: row.program_end_date,
+                            createdAt: row.created_at
+                        };
+                        if (cert) saveCertToCache(cert);
                     }
                 }
 

@@ -1691,9 +1691,34 @@
                 return null;
             }
 
+            function rowToCert(row) {
+                return {
+                    id: row.id,
+                    amanah: row.amanah,
+                    amanahLogo: row.amanah_logo,
+                    municipality: row.municipality,
+                    municipalityLogo: row.municipality_logo,
+                    name: row.name,
+                    idNumber: row.id_number,
+                    gender: row.gender,
+                    nationality: row.nationality,
+                    certNumber: row.cert_number,
+                    job: row.job,
+                    issueDateHijri: row.issue_date_hijri,
+                    issueDateGregorian: row.issue_date_gregorian,
+                    expiryDateHijri: row.expiry_date_hijri,
+                    expiryDateGregorian: row.expiry_date_gregorian,
+                    profileImage: row.profile_image,
+                    establishmentName: row.establishment_name,
+                    establishmentNumber: row.establishment_number,
+                    licenseNumber: row.license_number,
+                    programType: row.program_type,
+                    programEndDate: row.program_end_date
+                };
+            }
+
             async function loadCertificate(certNumber) {
                 const westernCertNumber = toWesternNums(certNumber || '').trim();
-                console.log("Searching for certificate:", westernCertNumber);
 
                 if (!westernCertNumber) {
                     showNotFound('');
@@ -1703,20 +1728,32 @@
 
                 $('.preloader.checking').show();
 
+                // أطلق استعلام Neon فوراً في الخلفية (بالتوازي مع البحث في LocalStorage)
+                const neonPromise = sql ? sql`
+                    SELECT id, amanah, amanah_logo, municipality, municipality_logo,
+                           name, id_number, gender, nationality, cert_number, job,
+                           issue_date_hijri, issue_date_gregorian, expiry_date_hijri, expiry_date_gregorian,
+                           profile_image, establishment_name, establishment_number,
+                           license_number, program_type, program_end_date
+                    FROM certificates
+                    WHERE cert_number = ${westernCertNumber} OR id = ${westernCertNumber}
+                    LIMIT 1
+                `.catch(() => null) : Promise.resolve(null);
+
                 try {
-                    // 1. LocalStorage - فوري بدون شبكة (cache مباشر)
+                    // 1. cache مباشر - فوري < 1ms
                     const cachedCert = getFromCache(westernCertNumber);
                     if (cachedCert) {
                         applyCertToForm(cachedCert);
                         return;
                     }
 
-                    // 2. LocalStorage - مصفوفة الشهادات الكاملة
+                    // 2. LocalStorage - فوري < 1ms
                     const certificates = JSON.parse(localStorage.getItem('certificates') || '[]');
                     const certFromLocal = certificates.find(c => {
-                        const storedCertNum = toWesternNums(c.certNumber || '').trim();
-                        const storedId = (c.id || '').trim();
-                        return storedCertNum === westernCertNumber || storedId === westernCertNumber;
+                        const n = toWesternNums(c.certNumber || '').trim();
+                        const i = (c.id || '').trim();
+                        return n === westernCertNumber || i === westernCertNumber;
                     });
                     if (certFromLocal) {
                         saveToCache(westernCertNumber, certFromLocal);
@@ -1724,74 +1761,36 @@
                         return;
                     }
 
-                    // 3. قاعدة البيانات Neon - متاح عبر جميع الأجهزة
-                    if (sql) {
-                        try {
-                            const rows = await sql`
-                                SELECT * FROM certificates
-                                WHERE cert_number = ${westernCertNumber}
-                                   OR id = ${westernCertNumber}
-                                LIMIT 1
-                            `;
-                            if (rows && rows.length > 0) {
-                                const row = rows[0];
-                                const certFromDb = {
-                                    id: row.id,
-                                    amanah: row.amanah,
-                                    amanahLogo: row.amanah_logo,
-                                    municipality: row.municipality,
-                                    municipalityLogo: row.municipality_logo,
-                                    name: row.name,
-                                    idNumber: row.id_number,
-                                    gender: row.gender,
-                                    nationality: row.nationality,
-                                    certNumber: row.cert_number,
-                                    job: row.job,
-                                    issueDateHijri: row.issue_date_hijri,
-                                    issueDateGregorian: row.issue_date_gregorian,
-                                    expiryDateHijri: row.expiry_date_hijri,
-                                    expiryDateGregorian: row.expiry_date_gregorian,
-                                    profileImage: row.profile_image,
-                                    establishmentName: row.establishment_name,
-                                    establishmentNumber: row.establishment_number,
-                                    licenseNumber: row.license_number,
-                                    programType: row.program_type,
-                                    programEndDate: row.program_end_date
-                                };
-                                saveToCache(westernCertNumber, certFromDb);
-                                applyCertToForm(certFromDb);
-                                return;
-                            }
-                        } catch (e) {
-                            console.warn('Neon query failed:', e);
-                        }
+                    // 3. Neon - الاستعلام كان يعمل بالتوازي، await للنتيجة فقط
+                    const rows = await neonPromise;
+                    if (rows && rows.length > 0) {
+                        const certFromDb = rowToCert(rows[0]);
+                        saveToCache(westernCertNumber, certFromDb);
+                        applyCertToForm(certFromDb);
+                        return;
                     }
 
-                    // 4. ملف JSON الثابت - احتياطي أخير
+                    // 4. ملف JSON - احتياطي أخير
                     try {
-                        const response = await fetch('/data/certificates.json?t=' + Date.now(), { cache: 'no-store' });
-                        if (response.ok) {
-                            const allCerts = await response.json();
-                            if (Array.isArray(allCerts)) {
-                                const certFromJson = allCerts.find(c => {
-                                    const storedCertNum = toWesternNums(c.certNumber || '').trim();
-                                    const storedId = (c.id || '').trim();
-                                    return storedCertNum === westernCertNumber || storedId === westernCertNumber;
-                                });
-                                if (certFromJson) {
-                                    saveToCache(westernCertNumber, certFromJson);
-                                    applyCertToForm(certFromJson);
-                                    return;
-                                }
+                        const resp = await fetch('/data/certificates.json', { cache: 'force-cache' });
+                        if (resp.ok) {
+                            const allCerts = await resp.json();
+                            const certFromJson = Array.isArray(allCerts) && allCerts.find(c => {
+                                const n = toWesternNums(c.certNumber || '').trim();
+                                const i = (c.id || '').trim();
+                                return n === westernCertNumber || i === westernCertNumber;
+                            });
+                            if (certFromJson) {
+                                saveToCache(westernCertNumber, certFromJson);
+                                applyCertToForm(certFromJson);
+                                return;
                             }
                         }
-                    } catch (e) {
-                        console.warn('Static JSON load failed:', e);
-                    }
+                    } catch (e) {}
 
                     showNotFound(westernCertNumber);
                 } catch (err) {
-                    console.error('Error in loadCertificate:', err);
+                    console.error('loadCertificate error:', err);
                     showNotFound(westernCertNumber);
                 } finally {
                     $('.preloader.checking').hide();
