@@ -24,20 +24,11 @@
     <script src="assets/firebase-init.js"></script>
     <script src="assets/auth.js"></script>
 
-    <!-- Neon Serverless Driver for Postgres -->
-    <script src="/assets/neon-serverless.js"></script>
     <script>
-        const NEON_CONNECTION_STRING = "postgresql://neondb_owner:npg_4fDRaepF6NLQ@ep-little-shape-antqb07h-pooler.c-6.us-east-1.aws.neon.tech/neondb?sslmode=require";
-        let sql;
-        try {
-            if (typeof neon !== 'undefined') {
-                const _c = neon.neon(NEON_CONNECTION_STRING);
-                const withTimeout = (p, ms) =>
-                    Promise.race([p, new Promise((_, r) => setTimeout(() => r(new Error('timeout')), ms))]);
-                sql = (strings, ...values) => withTimeout(_c(strings, ...values), 5000);
-            }
-        } catch (e) {
-            console.error('Failed to initialize Neon:', e);
+        async function fetchCertificateFromServer(id) {
+            const r = await fetch(`/api/certificates/${encodeURIComponent(id)}`);
+            if (!r.ok) return null;
+            return r.json();
         }
     </script>
 
@@ -537,17 +528,8 @@
                 localStorage.setItem('certificates', JSON.stringify(certificates));
             }
 
-            // أطلق استعلام Neon فوراً بالتوازي مع البحث في LocalStorage
-            const neonPromise = (typeof sql !== 'undefined') ? sql`
-                SELECT id, amanah, amanah_logo, municipality, municipality_logo,
-                       name, id_number, gender, nationality, cert_number, job,
-                       issue_date_hijri, issue_date_gregorian, expiry_date_hijri, expiry_date_gregorian,
-                       profile_image, establishment_name, establishment_number,
-                       license_number, program_type, program_end_date, created_at
-                FROM certificates
-                WHERE id = ${id} OR cert_number = ${id}
-                LIMIT 1
-            `.catch(() => null) : Promise.resolve(null);
+            // أطلق استعلام API فوراً بالتوازي مع البحث في LocalStorage
+            const serverPromise = fetchCertificateFromServer(id).catch(() => null);
 
             try {
                 // 1. Cache فردي في LocalStorage - فوري
@@ -572,11 +554,10 @@
                     cert = certificates.find(c => String(c.id) === String(id) || String(c.certNumber) === String(id));
                 }
 
-                // 3. Neon - الاستعلام كان يعمل بالتوازي، await للنتيجة فقط
+                // 3. Server API - await للنتيجة
                 if (!cert) {
-                    const results = await neonPromise;
-                    if (results && results.length > 0) {
-                        const row = results[0];
+                    const row = await serverPromise;
+                    if (row) {
                         cert = {
                             id: row.id,
                             amanah: row.amanah,

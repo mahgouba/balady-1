@@ -12,26 +12,76 @@
     <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <script src="assets/firebase-init.js" defer></script>
     <script src="assets/auth.js" defer></script>
-    <!-- Neon Serverless Driver for Postgres — بدون defer لضمان التحميل قبل الكود -->
-    <script src="/assets/neon-serverless.js"></script>
     <script>
-        const NEON_CONNECTION_STRING = "postgresql://neondb_owner:npg_4fDRaepF6NLQ@ep-little-shape-antqb07h-pooler.c-6.us-east-1.aws.neon.tech/neondb?sslmode=require";
-        
-        let sql;
         let databaseSetupComplete = false;
-        try {
-            if (typeof neon !== 'undefined') {
-                const _neonClient = neon.neon(NEON_CONNECTION_STRING);
-                const _withTimeout = (p, ms) =>
-                    Promise.race([p, new Promise((_, r) => setTimeout(() => r(new Error('timeout')), ms))]);
-                sql = (strings, ...values) => _withTimeout(_neonClient(strings, ...values), 6000);
-                console.log('Neon client initialized ✓');
-            } else {
-                console.warn('neon-serverless not loaded');
+
+        const api = {
+            async getCertificates() {
+                const r = await fetch('/api/certificates');
+                if (!r.ok) throw new Error(await r.text());
+                return r.json();
+            },
+            async saveCertificate(cert) {
+                const r = await fetch('/api/certificates', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(cert)
+                });
+                if (!r.ok) throw new Error(await r.text());
+                return r.json();
+            },
+            async updateCertificate(id, cert) {
+                const r = await fetch(`/api/certificates/${id}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(cert)
+                });
+                if (!r.ok) throw new Error(await r.text());
+                return r.json();
+            },
+            async deleteCertificate(id) {
+                const r = await fetch(`/api/certificates/${id}`, { method: 'DELETE' });
+                if (!r.ok) throw new Error(await r.text());
+                return r.json();
+            },
+            async getDropdownItems() {
+                const r = await fetch('/api/dropdown-items');
+                if (!r.ok) throw new Error(await r.text());
+                return r.json();
+            },
+            async addDropdownItem(type, name, logo) {
+                const r = await fetch('/api/dropdown-items', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ type, name, logo: logo || '' })
+                });
+                if (!r.ok) throw new Error(await r.text());
+                return r.json();
+            },
+            async updateDropdownItem(id, name, logo) {
+                const r = await fetch(`/api/dropdown-items/${id}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name, logo: logo || '' })
+                });
+                if (!r.ok) throw new Error(await r.text());
+                return r.json();
+            },
+            async deleteDropdownItem(id) {
+                const r = await fetch(`/api/dropdown-items/${id}`, { method: 'DELETE' });
+                if (!r.ok) throw new Error(await r.text());
+                return r.json();
+            },
+            async seedDropdownItems(items) {
+                const r = await fetch('/api/dropdown-items/seed', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(items)
+                });
+                if (!r.ok) throw new Error(await r.text());
+                return r.json();
             }
-        } catch (e) {
-            console.error('Failed to initialize Neon:', e);
-        }
+        };
 
         // =================== CACHING SYSTEM ===================
         const CACHE_PREFIX = 'cert_cache_';
@@ -103,109 +153,28 @@
         clearExpiredCache();
 
         async function setupDatabase() {
-            if (!sql || databaseSetupComplete) return;
-            try {
-                // Run database setup in background without blocking UI
-                (async () => {
-                    try {
-                        // Create certificates table if it doesn't exist
-                        await sql`
-                            CREATE TABLE IF NOT EXISTS certificates (
-                                id TEXT PRIMARY KEY,
-                                amanah TEXT,
-                                amanah_logo TEXT,
-                                municipality TEXT,
-                                municipality_logo TEXT,
-                                name TEXT,
-                                id_number TEXT,
-                                gender TEXT,
-                                nationality TEXT,
-                                cert_number TEXT,
-                                job TEXT,
-                                issue_date_hijri TEXT,
-                                issue_date_gregorian TEXT,
-                                expiry_date_hijri TEXT,
-                                expiry_date_gregorian TEXT,
-                                profile_image TEXT,
-                                establishment_name TEXT,
-                                establishment_number TEXT,
-                                license_number TEXT,
-                                program_type TEXT,
-                                program_end_date TEXT,
-                                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                            )
-                        `;
-                        
-                        // Create dropdown_items table if it doesn't exist
-                        await sql`
-                            CREATE TABLE IF NOT EXISTS dropdown_items (
-                                id SERIAL PRIMARY KEY,
-                                type TEXT,
-                                name TEXT,
-                                logo TEXT,
-                                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                            )
-                        `;
-
-                        // Add indexes for performance
+            // DB is managed server-side; sync any local-only certs to the server once
+            if (databaseSetupComplete) return;
+            databaseSetupComplete = true;
+            if (!localStorage.getItem('api_synced_v1')) {
+                const localCerts = JSON.parse(localStorage.getItem('certificates') || '[]');
+                if (localCerts.length > 0) {
+                    console.log(`مزامنة ${localCerts.length} شهادة إلى الخادم...`);
+                    let synced = 0;
+                    for (const c of localCerts) {
+                        if (!c.id) continue;
                         try {
-                            await sql`CREATE INDEX IF NOT EXISTS idx_cert_number ON certificates(cert_number)`;
-                            await sql`CREATE INDEX IF NOT EXISTS idx_id_number ON certificates(id_number)`;
-                        } catch (idxErr) {
-                            console.warn('Index creation skipped or failed:', idxErr);
+                            await api.saveCertificate(c);
+                            synced++;
+                        } catch (e) {
+                            console.warn('تخطي شهادة:', c.id, e.message);
                         }
-
-                        databaseSetupComplete = true;
-                        console.log('Database schema verified');
-
-                        // مزامنة تلقائية لشهادات LocalStorage إلى Neon (مرة واحدة فقط)
-                        if (!localStorage.getItem('neon_synced_v2')) {
-                            const localCerts = JSON.parse(localStorage.getItem('certificates') || '[]');
-                            if (localCerts.length > 0) {
-                                console.log(`مزامنة ${localCerts.length} شهادة إلى Neon...`);
-                                let synced = 0;
-                                for (const c of localCerts) {
-                                    if (!c.id) continue;
-                                    try {
-                                        await sql`
-                                            INSERT INTO certificates (
-                                                id, amanah, amanah_logo, municipality, municipality_logo,
-                                                name, id_number, gender, nationality, cert_number, job,
-                                                issue_date_hijri, issue_date_gregorian,
-                                                expiry_date_hijri, expiry_date_gregorian,
-                                                profile_image, establishment_name, establishment_number,
-                                                license_number, program_type, program_end_date
-                                            ) VALUES (
-                                                ${c.id}, ${c.amanah||''}, ${c.amanahLogo||''},
-                                                ${c.municipality||''}, ${c.municipalityLogo||''},
-                                                ${c.name||''}, ${c.idNumber||''}, ${c.gender||''},
-                                                ${c.nationality||''}, ${c.certNumber||c.id}, ${c.job||''},
-                                                ${c.issueDateHijri||''}, ${c.issueDateGregorian||''},
-                                                ${c.expiryDateHijri||''}, ${c.expiryDateGregorian||''},
-                                                ${c.profileImage||''}, ${c.establishmentName||''},
-                                                ${c.establishmentNumber||''}, ${c.licenseNumber||''},
-                                                ${c.programType||''}, ${c.programEndDate||''}
-                                            )
-                                            ON CONFLICT (id) DO NOTHING
-                                        `;
-                                        synced++;
-                                    } catch (e) {
-                                        console.warn('تخطي شهادة:', c.id, e.message);
-                                    }
-                                }
-                                console.log(`تمت مزامنة ${synced}/${localCerts.length} شهادة`);
-                            }
-                            localStorage.setItem('neon_synced_v2', Date.now());
-                        }
-                    } catch (e) {
-                        console.error('Database setup failed:', e);
                     }
-                })();
-            } catch (e) {
-                console.error('Database setup initiation failed:', e);
+                    console.log(`تمت مزامنة ${synced}/${localCerts.length} شهادة`);
+                }
+                localStorage.setItem('api_synced_v1', Date.now());
             }
         }
-        // setupDatabase is now called from initApp() at the bottom of the file
     </script>
     <style>
         body { background-color: #f4f7f6; font-family: 'IBM Plex Sans Arabic', sans-serif; }
@@ -529,46 +498,45 @@
             renderManagementLists();
             refreshDropdowns();
 
-            // Then try to load from Neon Postgres in background
-            if (typeof sql !== 'undefined') {
-                (async () => {
-                    try {
-                        const results = await sql`SELECT * FROM dropdown_items ORDER BY created_at ASC`;
-                        if (results && results.length > 0) {
-                            // Update dropdownData from DB
-                            const newDropdownData = { amanah: [], municipality: [], job: [], program: [], nationality: [] };
-                            results.forEach(item => {
-                                if (newDropdownData[item.type]) {
-                                    newDropdownData[item.type].push({
-                                        id: item.id,
-                                        name: item.name,
-                                        logo: item.logo || ''
-                                    });
-                                }
-                            });
-                            dropdownData = newDropdownData;
-                            saveDropdownData();
-                            renderManagementLists();
-                            refreshDropdowns();
-                            console.log('Dropdown data loaded from Neon Postgres');
-                        } else {
-                            // Seed database if empty
-                            try {
-                                for (const type in dropdownData) {
-                                    for (const item of dropdownData[type]) {
-                                        await sql`INSERT INTO dropdown_items (type, name, logo) VALUES (${type}, ${item.name}, ${item.logo || ''})`;
-                                    }
-                                }
-                                console.log('Dropdown data seeded to Neon Postgres');
-                            } catch (e) {
-                                console.error('Failed to seed dropdown items:', e);
+            // Then try to load from server API in background
+            (async () => {
+                try {
+                    const results = await api.getDropdownItems();
+                    if (results && results.length > 0) {
+                        const newDropdownData = { amanah: [], municipality: [], job: [], program: [], nationality: [] };
+                        results.forEach(item => {
+                            if (newDropdownData[item.type]) {
+                                newDropdownData[item.type].push({
+                                    id: item.id,
+                                    name: item.name,
+                                    logo: item.logo || ''
+                                });
                             }
+                        });
+                        dropdownData = newDropdownData;
+                        saveDropdownData();
+                        renderManagementLists();
+                        refreshDropdowns();
+                        console.log('Dropdown data loaded from server');
+                    } else {
+                        // Seed database if empty
+                        try {
+                            const seedItems = [];
+                            for (const type in dropdownData) {
+                                for (const item of dropdownData[type]) {
+                                    seedItems.push({ type, name: item.name, logo: item.logo || '' });
+                                }
+                            }
+                            await api.seedDropdownItems(seedItems);
+                            console.log('Dropdown data seeded to server');
+                        } catch (e) {
+                            console.error('Failed to seed dropdown items:', e);
                         }
-                    } catch (e) {
-                        console.error('Failed to load dropdown items from Neon:', e);
                     }
-                })();
-            }
+                } catch (e) {
+                    console.error('Failed to load dropdown items from server:', e);
+                }
+            })();
         }
 
         function saveDropdownData() {
@@ -624,13 +592,11 @@
             }
 
             const processAddition = async (item) => {
-                if (typeof sql !== 'undefined') {
-                    try {
-                        const result = await sql`INSERT INTO dropdown_items (type, name, logo) VALUES (${type}, ${item.name}, ${item.logo || ''}) RETURNING id`;
-                        item.id = result[0].id;
-                    } catch (e) {
-                        console.error('Failed to save item to Neon:', e);
-                    }
+                try {
+                    const result = await api.addDropdownItem(type, item.name, item.logo || '');
+                    item.id = result.id;
+                } catch (e) {
+                    console.error('Failed to save item to server:', e);
                 }
                 dropdownData[type].push(item);
                 saveDropdownData();
@@ -655,11 +621,11 @@
         function deleteItem(type, index) {
             openConfirmModal('حذف عنصر', 'هل تريد حذف هذا العنصر؟', async () => {
                 const item = dropdownData[type][index];
-                if (item.id && typeof sql !== 'undefined') {
+                if (item.id) {
                     try {
-                        await sql`DELETE FROM dropdown_items WHERE id = ${item.id}`;
+                        await api.deleteDropdownItem(item.id);
                     } catch (e) {
-                        console.error('Failed to delete item from Neon:', e);
+                        console.error('Failed to delete item from server:', e);
                     }
                 }
                 dropdownData[type].splice(index, 1);
@@ -765,49 +731,42 @@
                 }
                 window._cachedCertificates = certificates;
 
-                // Then try to load from Neon Postgres in background and update
-                if (typeof sql !== 'undefined') {
-                    (async () => {
-                        try {
-                            const results = await sql`SELECT * FROM certificates ORDER BY created_at DESC`;
-                            // Map snake_case to camelCase
-                            const dbCertificates = results.map(row => ({
-                                id: row.id,
-                                amanah: row.amanah,
-                                amanahLogo: row.amanah_logo,
-                                municipality: row.municipality,
-                                municipalityLogo: row.municipality_logo,
-                                name: row.name,
-                                idNumber: row.id_number,
-                                gender: row.gender,
-                                nationality: row.nationality,
-                                certNumber: row.cert_number,
-                                job: row.job,
-                                issueDateHijri: row.issue_date_hijri,
-                                issueDateGregorian: row.issue_date_gregorian,
-                                expiryDateHijri: row.expiry_date_hijri,
-                                expiryDateGregorian: row.expiry_date_gregorian,
-                                profileImage: row.profile_image,
-                                establishmentName: row.establishment_name,
-                                establishmentNumber: row.establishment_number,
-                                licenseNumber: row.license_number,
-                                programType: row.program_type,
-                                programEndDate: row.program_end_date,
-                                createdAt: row.created_at
-                            }));
-                            
-                            // Update cache and display if different
-                            if (dbCertificates.length > 0) {
-                                localStorage.setItem('certificates', JSON.stringify(dbCertificates));
-                                window._cachedCertificates = dbCertificates;
-                                renderCertList(dbCertificates);
-                            }
-                            console.log('Loaded from Neon Postgres and updated');
-                        } catch (e) {
-                            console.error('Neon load failed, using cache:', e);
-                        }
-                    })();
-                }
+                // Then load from server API and update
+                (async () => {
+                    try {
+                        const results = await api.getCertificates();
+                        const dbCertificates = results.map(row => ({
+                            id: row.id,
+                            amanah: row.amanah,
+                            amanahLogo: row.amanah_logo,
+                            municipality: row.municipality,
+                            municipalityLogo: row.municipality_logo,
+                            name: row.name,
+                            idNumber: row.id_number,
+                            gender: row.gender,
+                            nationality: row.nationality,
+                            certNumber: row.cert_number,
+                            job: row.job,
+                            issueDateHijri: row.issue_date_hijri,
+                            issueDateGregorian: row.issue_date_gregorian,
+                            expiryDateHijri: row.expiry_date_hijri,
+                            expiryDateGregorian: row.expiry_date_gregorian,
+                            profileImage: row.profile_image,
+                            establishmentName: row.establishment_name,
+                            establishmentNumber: row.establishment_number,
+                            licenseNumber: row.license_number,
+                            programType: row.program_type,
+                            programEndDate: row.program_end_date,
+                            createdAt: row.created_at
+                        }));
+                        localStorage.setItem('certificates', JSON.stringify(dbCertificates));
+                        window._cachedCertificates = dbCertificates;
+                        renderCertList(dbCertificates);
+                        console.log('Loaded from server and updated');
+                    } catch (e) {
+                        console.error('Server load failed, using cache:', e);
+                    }
+                })();
             } catch (err) {
                 console.error('Failed to load certificates:', err);
                 certList.innerHTML = '<div class="empty-state">تعذّر تحميل الشهادات.</div>';
@@ -995,54 +954,19 @@
 
             displayCertificates();
 
-            // حفظ في Neon في الخلفية (لا يؤخر الواجهة)
-            if (typeof sql !== 'undefined') {
-                (async () => {
-                    try {
-                        if (wasEditing) {
-                            await sql`
-                                UPDATE certificates SET
-                                    amanah = ${newCert.amanah}, amanah_logo = ${newCert.amanahLogo || ''},
-                                    municipality = ${newCert.municipality}, municipality_logo = ${newCert.municipalityLogo || ''},
-                                    name = ${newCert.name}, id_number = ${newCert.idNumber},
-                                    gender = ${newCert.gender}, nationality = ${newCert.nationality},
-                                    cert_number = ${newCert.certNumber}, job = ${newCert.job},
-                                    issue_date_hijri = ${newCert.issueDateHijri}, issue_date_gregorian = ${newCert.issueDateGregorian},
-                                    expiry_date_hijri = ${newCert.expiryDateHijri}, expiry_date_gregorian = ${newCert.expiryDateGregorian},
-                                    profile_image = ${newCert.profileImage || ''}, establishment_name = ${newCert.establishmentName || ''},
-                                    establishment_number = ${newCert.establishmentNumber || ''}, license_number = ${newCert.licenseNumber || ''},
-                                    program_type = ${newCert.programType || ''}, program_end_date = ${newCert.programEndDate || ''}
-                                WHERE id = ${newCert.id}
-                            `;
-                        } else {
-                            await sql`
-                                INSERT INTO certificates (
-                                    id, amanah, amanah_logo, municipality, municipality_logo,
-                                    name, id_number, gender, nationality, cert_number, job,
-                                    issue_date_hijri, issue_date_gregorian, expiry_date_hijri, expiry_date_gregorian,
-                                    profile_image, establishment_name, establishment_number, license_number,
-                                    program_type, program_end_date
-                                ) VALUES (
-                                    ${newCert.id}, ${newCert.amanah}, ${newCert.amanahLogo || ''},
-                                    ${newCert.municipality}, ${newCert.municipalityLogo || ''},
-                                    ${newCert.name}, ${newCert.idNumber}, ${newCert.gender}, ${newCert.nationality},
-                                    ${newCert.certNumber}, ${newCert.job},
-                                    ${newCert.issueDateHijri}, ${newCert.issueDateGregorian},
-                                    ${newCert.expiryDateHijri}, ${newCert.expiryDateGregorian},
-                                    ${newCert.profileImage || ''}, ${newCert.establishmentName || ''},
-                                    ${newCert.establishmentNumber || ''}, ${newCert.licenseNumber || ''},
-                                    ${newCert.programType || ''}, ${newCert.programEndDate || ''}
-                                )
-                                ON CONFLICT (id) DO UPDATE SET
-                                    name = EXCLUDED.name, cert_number = EXCLUDED.cert_number
-                            `;
-                        }
-                        console.log('Saved to Neon:', newCert.certNumber);
-                    } catch (e) {
-                        console.error('Neon save failed:', e);
+            // Save to server in background
+            (async () => {
+                try {
+                    if (wasEditing) {
+                        await api.updateCertificate(newCert.id, newCert);
+                    } else {
+                        await api.saveCertificate(newCert);
                     }
-                })();
-            }
+                    console.log('Saved to server:', newCert.certNumber);
+                } catch (e) {
+                    console.error('Server save failed:', e);
+                }
+            })();
 
             if (wasEditing) {
                 openAlertModal('تم التحديث', 'تم تحديث بيانات الشهادة بنجاح.');
@@ -1090,32 +1014,12 @@
                     createdAt: new Date().toISOString()
                 };
 
-                // Save to Neon Postgres
-                if (typeof sql !== 'undefined') {
-                    try {
-                        await sql`
-                            INSERT INTO certificates (
-                                id, amanah, amanah_logo, municipality, municipality_logo, 
-                                name, id_number, gender, nationality, cert_number, job, 
-                                issue_date_hijri, issue_date_gregorian, expiry_date_hijri, 
-                                expiry_date_gregorian, profile_image, establishment_name, 
-                                establishment_number, license_number, program_type, program_end_date
-                            ) VALUES (
-                                ${demoCert.id}, ${demoCert.amanah}, ${demoCert.amanahLogo}, 
-                                ${demoCert.municipality}, ${demoCert.municipalityLogo}, 
-                                ${demoCert.name}, ${demoCert.idNumber}, ${demoCert.gender}, 
-                                ${demoCert.nationality}, ${demoCert.certNumber}, ${demoCert.job}, 
-                                ${demoCert.issueDateHijri}, ${demoCert.issueDateGregorian}, 
-                                ${demoCert.expiryDateHijri}, ${demoCert.expiryDateGregorian}, 
-                                ${demoCert.profileImage}, ${demoCert.establishmentName}, 
-                                ${demoCert.establishmentNumber}, ${demoCert.licenseNumber}, 
-                                ${demoCert.programType}, ${demoCert.programEndDate}
-                            )
-                        `;
-                        console.log('Demo saved to Neon Postgres');
-                    } catch (e) {
-                        console.error('Neon demo save failed:', e);
-                    }
+                // Save to server
+                try {
+                    await api.saveCertificate(demoCert);
+                    console.log('Demo saved to server');
+                } catch (e) {
+                    console.error('Server demo save failed:', e);
                 }
 
                 // Save to Firebase if enabled
@@ -1147,11 +1051,9 @@
                 try {
                     removeCertificateCache(id);
                     displayCertificates();
-                    if (typeof sql !== 'undefined') {
-                        sql`DELETE FROM certificates WHERE id = ${id}`.catch(e =>
-                            console.error('Neon delete failed:', e)
-                        );
-                    }
+                    api.deleteCertificate(id).catch(e =>
+                        console.error('Server delete failed:', e)
+                    );
                 } catch (err) {
                     console.error('Failed to delete certificate:', err);
                     openAlertModal('خطأ', 'تعذّر حذف الشهادة. حاول مجدداً.');
@@ -1454,11 +1356,11 @@
             const { type, index } = currentEditInfo;
             const item = dropdownData[type][index];
             
-            if (item.id && typeof sql !== 'undefined') {
+            if (item.id) {
                 try {
-                    await sql`UPDATE dropdown_items SET name = ${item.name}, logo = ${item.logo || ''} WHERE id = ${item.id}`;
+                    await api.updateDropdownItem(item.id, item.name, item.logo || '');
                 } catch (e) {
-                    console.error('Failed to update item in Neon:', e);
+                    console.error('Failed to update item on server:', e);
                 }
             }
             

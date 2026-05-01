@@ -27,7 +27,7 @@ outputType = "webview"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "npx -y http-server public -p 5000 -a 0.0.0.0 -c-1 --cors --ext html"
+args = "node server.js"
 waitForPort = 5000
 
 [[ports]]
