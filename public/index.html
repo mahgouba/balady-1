@@ -966,6 +966,55 @@
 
             displayCertificates();
 
+            // حفظ في Neon في الخلفية (لا يؤخر الواجهة)
+            if (typeof sql !== 'undefined') {
+                (async () => {
+                    try {
+                        if (wasEditing) {
+                            await sql`
+                                UPDATE certificates SET
+                                    amanah = ${newCert.amanah}, amanah_logo = ${newCert.amanahLogo || ''},
+                                    municipality = ${newCert.municipality}, municipality_logo = ${newCert.municipalityLogo || ''},
+                                    name = ${newCert.name}, id_number = ${newCert.idNumber},
+                                    gender = ${newCert.gender}, nationality = ${newCert.nationality},
+                                    cert_number = ${newCert.certNumber}, job = ${newCert.job},
+                                    issue_date_hijri = ${newCert.issueDateHijri}, issue_date_gregorian = ${newCert.issueDateGregorian},
+                                    expiry_date_hijri = ${newCert.expiryDateHijri}, expiry_date_gregorian = ${newCert.expiryDateGregorian},
+                                    profile_image = ${newCert.profileImage || ''}, establishment_name = ${newCert.establishmentName || ''},
+                                    establishment_number = ${newCert.establishmentNumber || ''}, license_number = ${newCert.licenseNumber || ''},
+                                    program_type = ${newCert.programType || ''}, program_end_date = ${newCert.programEndDate || ''}
+                                WHERE id = ${newCert.id}
+                            `;
+                        } else {
+                            await sql`
+                                INSERT INTO certificates (
+                                    id, amanah, amanah_logo, municipality, municipality_logo,
+                                    name, id_number, gender, nationality, cert_number, job,
+                                    issue_date_hijri, issue_date_gregorian, expiry_date_hijri, expiry_date_gregorian,
+                                    profile_image, establishment_name, establishment_number, license_number,
+                                    program_type, program_end_date
+                                ) VALUES (
+                                    ${newCert.id}, ${newCert.amanah}, ${newCert.amanahLogo || ''},
+                                    ${newCert.municipality}, ${newCert.municipalityLogo || ''},
+                                    ${newCert.name}, ${newCert.idNumber}, ${newCert.gender}, ${newCert.nationality},
+                                    ${newCert.certNumber}, ${newCert.job},
+                                    ${newCert.issueDateHijri}, ${newCert.issueDateGregorian},
+                                    ${newCert.expiryDateHijri}, ${newCert.expiryDateGregorian},
+                                    ${newCert.profileImage || ''}, ${newCert.establishmentName || ''},
+                                    ${newCert.establishmentNumber || ''}, ${newCert.licenseNumber || ''},
+                                    ${newCert.programType || ''}, ${newCert.programEndDate || ''}
+                                )
+                                ON CONFLICT (id) DO UPDATE SET
+                                    name = EXCLUDED.name, cert_number = EXCLUDED.cert_number
+                            `;
+                        }
+                        console.log('Saved to Neon:', newCert.certNumber);
+                    } catch (e) {
+                        console.error('Neon save failed:', e);
+                    }
+                })();
+            }
+
             if (wasEditing) {
                 openAlertModal('تم التحديث', 'تم تحديث بيانات الشهادة بنجاح.');
             } else {
@@ -1069,6 +1118,11 @@
                 try {
                     removeCertificateCache(id);
                     displayCertificates();
+                    if (typeof sql !== 'undefined') {
+                        sql`DELETE FROM certificates WHERE id = ${id}`.catch(e =>
+                            console.error('Neon delete failed:', e)
+                        );
+                    }
                 } catch (err) {
                     console.error('Failed to delete certificate:', err);
                     openAlertModal('خطأ', 'تعذّر حذف الشهادة. حاول مجدداً.');

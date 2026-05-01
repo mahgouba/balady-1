@@ -24,7 +24,29 @@
     <link href="https://apps.balady.gov.sa/BALADYCDN/Content/plugins/DataTables/Style.css" rel="stylesheet" />
     <link href="https://apps.balady.gov.sa/BALADYCDN/Content/style.css?v=1" rel="stylesheet" type="text/css">
     
+    <!-- Neon Serverless Driver -->
+    <script src="/assets/neon-serverless.js"></script>
     <script>
+        // =================== NEON DB ===================
+        const NEON_CONNECTION_STRING = "postgresql://neondb_owner:npg_QsVlu48oOAih@ep-tiny-silence-amv285wr.c-5.us-east-1.aws.neon.tech/neondb?sslmode=require";
+        let sql = null;
+        try {
+            if (typeof neon !== 'undefined') {
+                const _client = neon.neon(NEON_CONNECTION_STRING);
+                sql = async (strings, ...values) => {
+                    let retries = 2;
+                    while (retries > 0) {
+                        try { return await _client(strings, ...values); }
+                        catch (err) {
+                            retries--;
+                            if (retries === 0) throw err;
+                            await new Promise(r => setTimeout(r, 300));
+                        }
+                    }
+                };
+            }
+        } catch(e) { console.warn('Neon init failed:', e); }
+
         // =================== CACHING SYSTEM ===================
         const CACHE_PREFIX = 'cert_cache_';
         const CACHE_DURATION = 30 * 60 * 1000; // 30 minutes
@@ -1702,7 +1724,50 @@
                         return;
                     }
 
-                    // 3. ملف JSON الثابت - طلب شبكة واحد سريع
+                    // 3. قاعدة البيانات Neon - متاح عبر جميع الأجهزة
+                    if (sql) {
+                        try {
+                            const rows = await sql`
+                                SELECT * FROM certificates
+                                WHERE cert_number = ${westernCertNumber}
+                                   OR id = ${westernCertNumber}
+                                LIMIT 1
+                            `;
+                            if (rows && rows.length > 0) {
+                                const row = rows[0];
+                                const certFromDb = {
+                                    id: row.id,
+                                    amanah: row.amanah,
+                                    amanahLogo: row.amanah_logo,
+                                    municipality: row.municipality,
+                                    municipalityLogo: row.municipality_logo,
+                                    name: row.name,
+                                    idNumber: row.id_number,
+                                    gender: row.gender,
+                                    nationality: row.nationality,
+                                    certNumber: row.cert_number,
+                                    job: row.job,
+                                    issueDateHijri: row.issue_date_hijri,
+                                    issueDateGregorian: row.issue_date_gregorian,
+                                    expiryDateHijri: row.expiry_date_hijri,
+                                    expiryDateGregorian: row.expiry_date_gregorian,
+                                    profileImage: row.profile_image,
+                                    establishmentName: row.establishment_name,
+                                    establishmentNumber: row.establishment_number,
+                                    licenseNumber: row.license_number,
+                                    programType: row.program_type,
+                                    programEndDate: row.program_end_date
+                                };
+                                saveToCache(westernCertNumber, certFromDb);
+                                applyCertToForm(certFromDb);
+                                return;
+                            }
+                        } catch (e) {
+                            console.warn('Neon query failed:', e);
+                        }
+                    }
+
+                    // 4. ملف JSON الثابت - احتياطي أخير
                     try {
                         const response = await fetch('/data/certificates.json?t=' + Date.now(), { cache: 'no-store' });
                         if (response.ok) {
