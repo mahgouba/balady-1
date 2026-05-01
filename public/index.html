@@ -1,0 +1,1389 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>لوحة التحكم - إدارة الشهادات الصحية</title>
+    <link rel="preconnect" href="https://apps.balady.gov.sa">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet" href="https://apps.balady.gov.sa/BALADYCDN/Content/css/bootstrap.min.css">
+    <link rel="stylesheet" href="https://apps.balady.gov.sa/BALADYCDN/Content/css/app.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <script src="assets/firebase-init.js" defer></script>
+    <script src="assets/auth.js" defer></script>
+    <!-- Neon Serverless Driver for Postgres -->
+    <script src="/assets/neon-serverless.js" defer></script>
+    <script>
+        // Store connection string securely in memory (in a real app, this would be on a backend)
+        const NEON_CONNECTION_STRING = "postgresql://neondb_owner:npg_QsVlu48oOAih@ep-tiny-silence-amv285wr.c-5.us-east-1.aws.neon.tech/neondb?sslmode=require";
+        
+        // Initialize Neon client with fast retry logic
+        let sql;
+        let databaseSetupComplete = false;
+        try {
+            if (typeof neon !== 'undefined') {
+                const client = neon.neon(NEON_CONNECTION_STRING);
+                // Wrapper to handle fetch errors with faster retries
+                sql = async (strings, ...values) => {
+                    let retries = 2;
+                    while (retries > 0) {
+                        try {
+                            return await client(strings, ...values);
+                        } catch (err) {
+                            console.warn(`Neon query failed, retrying (${retries} left):`, err);
+                            retries--;
+                            if (retries === 0) throw err;
+                            await new Promise(r => setTimeout(r, 200)); // wait 200ms instead of 1s
+                        }
+                    }
+                };
+                console.log('Neon Postgres client initialized with fast retry wrapper');
+            }
+        } catch (e) {
+            console.error('Failed to initialize Neon:', e);
+        }
+
+        // =================== CACHING SYSTEM ===================
+        const CACHE_PREFIX = 'cert_cache_';
+        const CACHE_DURATION = 30 * 60 * 1000; // 30 minutes
+
+        function getCacheKey(certNumber) {
+            return CACHE_PREFIX + certNumber;
+        }
+
+        function getFromCache(certNumber) {
+            try {
+                const cacheKey = getCacheKey(certNumber);
+                const cached = localStorage.getItem(cacheKey);
+                if (!cached) return null;
+
+                const data = JSON.parse(cached);
+                const now = Date.now();
+
+                // Check if cache is expired
+                if (now - data.timestamp > CACHE_DURATION) {
+                    localStorage.removeItem(cacheKey);
+                    return null;
+                }
+
+                console.log('Cache hit for:', certNumber);
+                return data.certificate;
+            } catch (e) {
+                console.error('Cache read error:', e);
+                return null;
+            }
+        }
+
+        function saveToCache(certNumber, certificate) {
+            try {
+                const cacheKey = getCacheKey(certNumber);
+                const data = {
+                    certificate: certificate,
+                    timestamp: Date.now()
+                };
+                localStorage.setItem(cacheKey, JSON.stringify(data));
+                console.log('Cached certificate:', certNumber);
+            } catch (e) {
+                console.error('Cache save error:', e);
+            }
+        }
+
+        function clearExpiredCache() {
+            try {
+                const now = Date.now();
+                for (let i = 0; i < localStorage.length; i++) {
+                    const key = localStorage.key(i);
+                    if (key && key.startsWith(CACHE_PREFIX)) {
+                        try {
+                            const data = JSON.parse(localStorage.getItem(key));
+                            if (now - data.timestamp > CACHE_DURATION * 24) { // Clear after 24 hours
+                                localStorage.removeItem(key);
+                            }
+                        } catch (e) {
+                            localStorage.removeItem(key);
+                        }
+                    }
+                }
+            } catch (e) {
+                console.error('Cache cleanup error:', e);
+            }
+        }
+
+        // Clean expired cache on page load
+        clearExpiredCache();
+
+        async function setupDatabase() {
+            if (!sql || databaseSetupComplete) return;
+            try {
+                // Run database setup in background without blocking UI
+                (async () => {
+                    try {
+                        // Create certificates table if it doesn't exist
+                        await sql`
+                            CREATE TABLE IF NOT EXISTS certificates (
+                                id TEXT PRIMARY KEY,
+                                amanah TEXT,
+                                amanah_logo TEXT,
+                                municipality TEXT,
+                                municipality_logo TEXT,
+                                name TEXT,
+                                id_number TEXT,
+                                gender TEXT,
+                                nationality TEXT,
+                                cert_number TEXT,
+                                job TEXT,
+                                issue_date_hijri TEXT,
+                                issue_date_gregorian TEXT,
+                                expiry_date_hijri TEXT,
+                                expiry_date_gregorian TEXT,
+                                profile_image TEXT,
+                                establishment_name TEXT,
+                                establishment_number TEXT,
+                                license_number TEXT,
+                                program_type TEXT,
+                                program_end_date TEXT,
+                                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                            )
+                        `;
+                        
+                        // Create dropdown_items table if it doesn't exist
+                        await sql`
+                            CREATE TABLE IF NOT EXISTS dropdown_items (
+                                id SERIAL PRIMARY KEY,
+                                type TEXT,
+                                name TEXT,
+                                logo TEXT,
+                                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                            )
+                        `;
+
+                        // Add indexes for performance
+                        try {
+                            await sql`CREATE INDEX IF NOT EXISTS idx_cert_number ON certificates(cert_number)`;
+                            await sql`CREATE INDEX IF NOT EXISTS idx_id_number ON certificates(id_number)`;
+                        } catch (idxErr) {
+                            console.warn('Index creation skipped or failed:', idxErr);
+                        }
+
+                        databaseSetupComplete = true;
+                        console.log('Database schema verified');
+                    } catch (e) {
+                        console.error('Database setup failed:', e);
+                    }
+                })();
+            } catch (e) {
+                console.error('Database setup initiation failed:', e);
+            }
+        }
+        // setupDatabase is now called from initApp() at the bottom of the file
+    </script>
+    <style>
+        body { background-color: #f4f7f6; font-family: 'IBM Plex Sans Arabic', sans-serif; }
+        .dashboard-container { max-width: 1200px; margin: 30px auto; padding: 20px; }
+        .card { border: none; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.08); margin-bottom: 30px; background: #fff; }
+        .card-header { background-color: #00422f; color: white; border-radius: 12px 12px 0 0 !important; padding: 15px 25px; font-weight: bold; font-size: 18px; display: flex; justify-content: space-between; align-items: center; }
+        .card-header .toggle-btn { background: rgba(255,255,255,0.2); border: none; color: white; border-radius: 4px; padding: 2px 10px; font-size: 14px; cursor: pointer; }
+        .card-header .toggle-btn:hover { background: rgba(255,255,255,0.3); }
+        .btn-primary { background-color: #00422f; border: none; padding: 12px 30px; border-radius: 8px; font-weight: 600; }
+        .btn-primary:hover { background-color: #005a40; }
+        .btn-success { background-color: #00895a; border: none; padding: 12px 30px; border-radius: 8px; font-weight: 600; }
+        .btn-success:hover { background-color: #00a86b; }
+        .btn-secondary { background-color: #6c757d; border: none; padding: 8px 15px; border-radius: 6px; font-size: 12px; }
+        .form-label { font-weight: 600; color: #333; margin-bottom: 8px; display: block; }
+        .form-control, .form-select { border-radius: 8px; padding: 12px; border: 1px solid #ddd; }
+        .form-control:focus, .form-select:focus { border-color: #00422f; box-shadow: 0 0 0 0.2rem rgba(0,66,47,0.15); }
+        .cert-list-item { display: flex; justify-content: space-between; align-items: center; padding: 15px 20px; border-bottom: 1px solid #eee; transition: background 0.2s; }
+        .cert-list-item:hover { background: #f8f9fa; }
+        .cert-list-item:last-child { border-bottom: none; }
+        .cert-info { flex-grow: 1; }
+        .cert-name { font-weight: bold; color: #00422f; font-size: 18px; margin-bottom: 5px; }
+        .cert-id { color: #666; font-size: 14px; }
+        .actions .btn { margin-right: 8px; }
+        .empty-state { text-align: center; padding: 60px 40px; color: #999; }
+        .preview-link { font-size: 12px; color: #00895a; text-decoration: none; margin-right: 15px; }
+        .section-title { font-size: 16px; font-weight: 700; color: #00422f; margin: 25px 0 15px; padding-bottom: 10px; border-bottom: 2px solid #00422f; }
+        .img-preview { width: 120px; height: 120px; border-radius: 8px; object-fit: cover; border: 2px solid #ddd; margin-top: 10px; }
+        .file-input-wrapper { position: relative; overflow: hidden; display: inline-block; width: 100%; }
+        .file-input-wrapper input[type=file] { position: absolute; left: 0; top: 0; opacity: 0; width: 100%; height: 100%; cursor: pointer; }
+        .file-input-label { display: flex; align-items: center; justify-content: center; padding: 40px; border: 2px dashed #ccc; border-radius: 8px; background: #f8f9fa; cursor: pointer; transition: all 0.3s; }
+        .file-input-label:hover { border-color: #00422f; background: #f0f7f4; }
+        .management-section { background: #f8f9fa; padding: 20px; border-radius: 8px; margin-bottom: 20px; border: 1px solid #e0e0e0; }
+        .management-section h5 { font-weight: 700; color: #00422f; margin-bottom: 15px; }
+        .logo-preview { width: 60px; height: 60px; object-fit: contain; border: 1px solid #ddd; border-radius: 4px; margin-top: 5px; }
+        .modal-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 9999; display: none; align-items: center; justify-content: center; }
+        .modal-overlay.show { display: flex; }
+        .modal-content { background: #fff; padding: 30px; border-radius: 12px; width: 90%; max-width: 500px; max-height: 80vh; overflow-y: auto; }
+        .modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; padding-bottom: 15px; border-bottom: 2px solid #00422f; }
+        .modal-header h4 { margin: 0; color: #00422f; }
+        .modal-close { background: none; border: none; font-size: 24px; cursor: pointer; color: #666; }
+        .list-item { display: flex; justify-content: space-between; align-items: center; padding: 10px; border-bottom: 1px solid #eee; }
+        .list-item:last-child { border-bottom: none; }
+        .list-item .item-text { flex-grow: 1; }
+        .list-item .item-actions { display: flex; gap: 5px; }
+        .add-form { display: flex; gap: 10px; margin-top: 15px; }
+        .add-form input { flex-grow: 1; }
+        .info-text { font-size: 12px; color: #666; margin-top: 5px; }
+        .HijriDate { direction: ltr; text-align: center; }
+    </style>
+</head>
+<body>
+
+    <div class="dashboard-container">
+        <h1 class="text-center mb-4" style="color: #00422f; font-weight: 800;">لوحة التحكم - إدارة الشهادات الصحية</h1>
+
+        <!-- إدارة القوائم المنسدلة -->
+        <div class="card">
+            <div class="card-header">
+                <span>⚙️ إدارة القوائم المنسدلة</span>
+                <button class="toggle-btn" onclick="toggleCardBody(this)">إظهار</button>
+            </div>
+            <div class="card-body p-4" id="managementCardBody" style="display: none;">
+                    <div class="row">
+                    <div class="col-md-6">
+                        <div class="management-section">
+                            <h5>🏛️ الأمانات</h5>
+                            <div id="amanahList"></div>
+                            <div class="add-form">
+                                <input type="text" id="newAmanah" class="form-control" placeholder="أضف أمانة جديدة">
+                                <button type="button" class="btn btn-primary btn-sm" onclick="addItem('amanah')">إضافة</button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="management-section">
+                            <h5>🏢 البلديات</h5>
+                            <div id="municipalityList"></div>
+                            <div class="add-form">
+                                <input type="text" id="newMunicipality" class="form-control" placeholder="أضف بلدية جديدة">
+                                <input type="file" id="newMunicipalityLogo" class="form-control" accept="image/*" style="width: 120px;">
+                                <button type="button" class="btn btn-primary btn-sm" onclick="addItem('municipality')">إضافة</button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="management-section">
+                            <h5>💼 المهن</h5>
+                            <div id="jobList"></div>
+                            <div class="add-form">
+                                <input type="text" id="newJob" class="form-control" placeholder="أضف مهنة جديدة">
+                                <button type="button" class="btn btn-primary btn-sm" onclick="addItem('job')">إضافة</button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="management-section">
+                            <h5>🌍 الجنسيات</h5>
+                            <div id="nationalityList"></div>
+                            <div class="add-form">
+                                <input type="text" id="newNationality" class="form-control" placeholder="أضف جنسية جديدة">
+                                <button type="button" class="btn btn-primary btn-sm" onclick="addItem('nationality')">إضافة</button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-12">
+                        <div class="management-section">
+                            <h5>📚 البرامج التثقيفية</h5>
+                            <div id="programList"></div>
+                            <div class="add-form">
+                                <input type="text" id="newProgram" class="form-control" placeholder="أضف برنامج جديد">
+                                <button type="button" class="btn btn-primary btn-sm" onclick="addItem('program')">إضافة</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- نموذج إنشاء شهادة جديدة -->
+        <div class="card">
+            <div class="card-header">إنشاء شهادة جديدة</div>
+            <div class="card-body p-4">
+                <form id="certForm">
+                    <div class="row g-3">
+                        <!-- Row 1: الأمانة والبلدية -->
+                        <div class="col-md-6">
+                            <label class="form-label">الأمانة</label>
+                            <div style="display: flex; gap: 10px;">
+                                <select id="cert_amanah" class="form-select" required style="flex-grow: 1;"></select>
+                                <button type="button" class="btn btn-secondary" onclick="refreshDropdowns()">🔄</button>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">البلدية</label>
+                            <select id="cert_municipality" class="form-select" required></select>
+                        </div>
+
+                        <!-- Row 2: الاسم ورقم الهوية -->
+                        <div class="col-md-6">
+                            <label class="form-label">الإسم بالكامل</label>
+                            <input type="text" id="cert_name" class="form-control" required>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">رقم الهوية</label>
+                            <input type="text" id="cert_idNumber" class="form-control" required>
+                        </div>
+
+                        <!-- Row 3: الجنس والجنسية -->
+                        <div class="col-md-6">
+                            <label class="form-label">الجنس</label>
+                            <select id="cert_gender" class="form-select" required>
+                                <option value="ذكر">ذكر</option>
+                                <option value="أنثى">أنثى</option>
+                            </select>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">الجنسية</label>
+                            <select id="cert_nationality" class="form-select" required></select>
+                        </div>
+
+                        <!-- Row 4: رقم الشهادة والمهنة -->
+                        <div class="col-md-6">
+                            <label class="form-label">رقم الشهادة الصحية</label>
+                            <input type="text" id="cert_certNumber" class="form-control" readonly style="background: #e9ecef; cursor: not-allowed;">
+                            <span class="info-text">يتم التوليد تلقائياً</span>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">المهنة</label>
+                            <select id="cert_job" class="form-select" required></select>
+                        </div>
+
+                        <!-- Row 5: تاريخ الإصدار -->
+                        <div class="col-md-6">
+                            <label class="form-label">تاريخ الإصدار (هجري)</label>
+                            <input type="text" id="cert_issueDateHijri" class="form-control HijriDate" placeholder="1445/01/01" required>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">تاريخ الإصدار (ميلادي)</label>
+                            <input type="date" id="cert_issueDateGregorian" class="form-control" required>
+                        </div>
+
+                        <!-- Row 6: تاريخ الانتهاء -->
+                        <div class="col-md-6">
+                            <label class="form-label">تاريخ الانتهاء (هجري)</label>
+                            <input type="text" id="cert_expiryDateHijri" class="form-control HijriDate" placeholder="1446/01/01" required readonly style="background: #e9ecef;">
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">تاريخ الانتهاء (ميلادي)</label>
+                            <input type="date" id="cert_expiryDateGregorian" class="form-control" required readonly style="background: #e9ecef;">
+                        </div>
+
+                        <!-- Row 7: البرنامج التثقيفي -->
+                        <div class="col-md-6">
+                            <label class="form-label">نوع البرنامج التثقيفي</label>
+                            <select id="cert_program" class="form-select"></select>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">تاريخ انتهاء البرنامج التثقيفي</label>
+                            <input type="date" id="cert_programEndDate" class="form-control">
+                        </div>
+
+                        <!-- Row 8: بيانات الرخصة والمنشأة -->
+                        <div class="col-md-4">
+                            <label class="form-label">رقم الرخصة</label>
+                            <input type="text" id="cert_licenseNumber" class="form-control">
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label">إسم المنشأة</label>
+                            <input type="text" id="cert_establishmentName" class="form-control">
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label">رقم المنشأة</label>
+                            <input type="text" id="cert_establishmentNumber" class="form-control">
+                        </div>
+
+                        <!-- Row 9: الصورة الشخصية -->
+                        <div class="col-md-12">
+                            <label class="form-label">الصورة الشخصية</label>
+                            <div class="file-input-wrapper">
+                                <div class="file-input-label" id="fileLabel">
+                                    <span>📷 انقر هنا لرفع الصورة الشخصية</span>
+                                </div>
+                                <input type="file" id="cert_profileImage" accept="image/*" onchange="previewImage(this)">
+                            </div>
+                            <img id="imgPreview" class="img-preview" style="display: none;">
+                        </div>
+                    </div>
+                    <div class="text-center mt-4">
+                        <button type="submit" class="btn btn-success btn-lg">✨ إنشاء الشهادة</button>
+                        <button type="button" id="cancelEditBtn" class="btn btn-secondary btn-lg" onclick="cancelEdit()" style="display:none; margin-right:10px;">إلغاء التحرير</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- قائمة الشهادات -->
+        <div class="card">
+            <div class="card-header">
+                <span>الشهادات الحالية</span>
+            </div>
+            <div class="card-body p-0" id="certList">
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const certForm = document.getElementById('certForm');
+        const certList = document.getElementById('certList');
+
+        if (certList) {
+            certList.addEventListener('click', function(e) {
+                const btn = e.target.closest('button[data-action]');
+                if (!btn) return;
+                const action = btn.getAttribute('data-action');
+                const id = btn.getAttribute('data-id');
+                if (action === 'edit' && typeof window.editCert === 'function') {
+                    window.editCert(id);
+                } else if (action === 'delete' && typeof window.deleteCert === 'function') {
+                    window.deleteCert(id);
+                }
+            });
+        }
+
+        let dropdownData = {
+            amanah: [],
+            municipality: [],
+            job: [],
+            program: [],
+            nationality: []
+        };
+
+        async function loadDropdownData() {
+            // First load from LocalStorage or defaults for immediate display
+            const saved = localStorage.getItem('dropdownData');
+            if (saved) {
+                dropdownData = JSON.parse(saved);
+                // Ensure nationality exists for older versions
+                if (!dropdownData.nationality) dropdownData.nationality = [];
+            } else {
+                dropdownData = {
+                    amanah: [
+                        { name: 'أمانة منطقة حائل', logo: '' },
+                        { name: 'أمانة منطقة الرياض', logo: '' },
+                        { name: 'أمانة منطقة مكة المكرمة', logo: '' },
+                        { name: 'أمانة منطقة المدينة المنورة', logo: '' },
+                        { name: 'أمانة منطقة الشرقية', logo: '' }
+                    ],
+                    municipality: [
+                        { name: 'بلدية انبوان' },
+                        { name: 'بلدية وسط حائل' },
+                        { name: 'بلدية شمال حائل' },
+                        { name: 'بلدية جنوب حائل' }
+                    ],
+                    job: [
+                        { name: 'عامل مطبخ' },
+                        { name: 'طباخ' },
+                        { name: 'عامل تقديم' },
+                        { name: 'مدير مطعم' },
+                        { name: 'صاحب منشأة غذائية' },
+                        { name: 'مشرف غذائي' }
+                    ],
+                    program: [
+                        { name: 'منشآت الغذاء' },
+                        { name: 'التعامل مع الغذاء' },
+                        { name: 'السلامة الغذائية' },
+                        { name: 'النظافة الشخصية' }
+                    ],
+                    nationality: [
+                        { name: 'سعودي' },
+                        { name: 'مصر' },
+                        { name: 'باكستان' },
+                        { name: 'الهند' },
+                        { name: 'بنغلاديش' },
+                        { name: 'اليمن' }
+                    ]
+                };
+                saveDropdownData();
+            }
+            
+            // Render immediately
+            renderManagementLists();
+            refreshDropdowns();
+
+            // Then try to load from Neon Postgres in background
+            if (typeof sql !== 'undefined') {
+                (async () => {
+                    try {
+                        const results = await sql`SELECT * FROM dropdown_items ORDER BY created_at ASC`;
+                        if (results && results.length > 0) {
+                            // Update dropdownData from DB
+                            const newDropdownData = { amanah: [], municipality: [], job: [], program: [], nationality: [] };
+                            results.forEach(item => {
+                                if (newDropdownData[item.type]) {
+                                    newDropdownData[item.type].push({
+                                        id: item.id,
+                                        name: item.name,
+                                        logo: item.logo || ''
+                                    });
+                                }
+                            });
+                            dropdownData = newDropdownData;
+                            saveDropdownData();
+                            renderManagementLists();
+                            refreshDropdowns();
+                            console.log('Dropdown data loaded from Neon Postgres');
+                        } else {
+                            // Seed database if empty
+                            try {
+                                for (const type in dropdownData) {
+                                    for (const item of dropdownData[type]) {
+                                        await sql`INSERT INTO dropdown_items (type, name, logo) VALUES (${type}, ${item.name}, ${item.logo || ''})`;
+                                    }
+                                }
+                                console.log('Dropdown data seeded to Neon Postgres');
+                            } catch (e) {
+                                console.error('Failed to seed dropdown items:', e);
+                            }
+                        }
+                    } catch (e) {
+                        console.error('Failed to load dropdown items from Neon:', e);
+                    }
+                })();
+            }
+        }
+
+        function saveDropdownData() {
+            localStorage.setItem('dropdownData', JSON.stringify(dropdownData));
+        }
+
+        function toggleCardBody(btn) {
+            const body = document.getElementById('managementCardBody');
+            if (body.style.display === 'none') {
+                body.style.display = 'block';
+                btn.textContent = 'إخفاء';
+            } else {
+                body.style.display = 'none';
+                btn.textContent = 'إظهار';
+            }
+        }
+
+        function renderManagementLists() {
+            ['amanah', 'municipality', 'job', 'program', 'nationality'].forEach(type => {
+                const container = document.getElementById(type + 'List');
+                if (!container) return;
+                container.innerHTML = '';
+                dropdownData[type].forEach((item, index) => {
+                    const div = document.createElement('div');
+                    div.className = 'list-item';
+                    let logoHtml = '';
+                    if ((type === 'amanah' || type === 'municipality') && item.logo) {
+                        logoHtml = `<img src="${item.logo}" class="logo-preview" style="margin-right: 10px;">`;
+                    }
+                    div.innerHTML = `
+                        <div class="item-text" style="display: flex; align-items: center;">
+                            ${logoHtml}
+                            <span>${item.name}</span>
+                        </div>
+                        <div class="item-actions">
+                            <button class="btn btn-warning btn-sm" onclick="openEditModal('${type}', ${index})">✏️</button>
+                            <button class="btn btn-danger btn-sm" onclick="deleteItem('${type}', ${index})">🗑️</button>
+                        </div>
+                    `;
+                    container.appendChild(div);
+                });
+            });
+        }
+
+        async function addItem(type) {
+            const input = document.getElementById('new' + type.charAt(0).toUpperCase() + type.slice(1));
+            const logoInput = document.getElementById('new' + type.charAt(0).toUpperCase() + type.slice(1) + 'Logo');
+            let newItem = { name: input.value.trim(), logo: '' };
+
+            if (!newItem.name) {
+                openAlertModal('تنبيه', 'الرجاء إدخال اسم');
+                return;
+            }
+
+            const processAddition = async (item) => {
+                if (typeof sql !== 'undefined') {
+                    try {
+                        const result = await sql`INSERT INTO dropdown_items (type, name, logo) VALUES (${type}, ${item.name}, ${item.logo || ''}) RETURNING id`;
+                        item.id = result[0].id;
+                    } catch (e) {
+                        console.error('Failed to save item to Neon:', e);
+                    }
+                }
+                dropdownData[type].push(item);
+                saveDropdownData();
+                renderManagementLists();
+                refreshDropdowns();
+                input.value = '';
+                if (logoInput) logoInput.value = '';
+            };
+
+            if ((type === 'municipality' || type === 'amanah') && logoInput && logoInput.files[0]) {
+                const reader = new FileReader();
+                reader.onload = async function(e) {
+                    newItem.logo = e.target.result;
+                    await processAddition(newItem);
+                };
+                reader.readAsDataURL(logoInput.files[0]);
+            } else {
+                await processAddition(newItem);
+            }
+        }
+
+        function deleteItem(type, index) {
+            openConfirmModal('حذف عنصر', 'هل تريد حذف هذا العنصر؟', async () => {
+                const item = dropdownData[type][index];
+                if (item.id && typeof sql !== 'undefined') {
+                    try {
+                        await sql`DELETE FROM dropdown_items WHERE id = ${item.id}`;
+                    } catch (e) {
+                        console.error('Failed to delete item from Neon:', e);
+                    }
+                }
+                dropdownData[type].splice(index, 1);
+                saveDropdownData();
+                renderManagementLists();
+                refreshDropdowns();
+            });
+        }
+
+        function refreshDropdowns() {
+            ['amanah', 'municipality', 'job', 'program', 'nationality'].forEach(type => {
+                const select = document.getElementById('cert_' + type);
+                if (select) {
+                    select.innerHTML = '';
+                    dropdownData[type].forEach(item => {
+                        const opt = document.createElement('option');
+                        opt.value = item.name;
+                        opt.textContent = item.name;
+                        select.appendChild(opt);
+                    });
+                }
+            });
+        }
+
+        function generateCertNumber() {
+            const prefix = '470';
+            let suffix = '';
+            for (let i = 0; i < 9; i++) {
+                suffix += Math.floor(Math.random() * 10).toString();
+            }
+            return prefix + suffix;
+        }
+
+        function toHijriDate(gregorianDate) {
+            const date = new Date(gregorianDate);
+            const hijri = new Intl.DateTimeFormat('ar-SA-u-ca-islamic', { year: 'numeric', month: '2-digit', day: '2-digit' }).format(date);
+            return hijri.replace('[\u0660-\u0669]', function(m) { return m.charCodeAt(0); });
+        }
+
+        function addOneYear(gregorianDate) {
+            const date = new Date(gregorianDate);
+            date.setFullYear(date.getFullYear() + 1);
+            return date;
+        }
+
+        function addThreeYears(gregorianDate) {
+            const date = new Date(gregorianDate);
+            date.setFullYear(date.getFullYear() + 3);
+            return date;
+        }
+
+        function previewImage(input) {
+            if (input.files && input.files[0]) {
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    document.getElementById('imgPreview').src = e.target.result;
+                    document.getElementById('imgPreview').style.display = 'block';
+                    document.getElementById('fileLabel').style.display = 'none';
+                };
+                reader.readAsDataURL(input.files[0]);
+            }
+        }
+
+        function setInitialDates() {
+            const today = new Date();
+            const todayStr = today.toISOString().split('T')[0];
+            document.getElementById('cert_issueDateGregorian').value = todayStr;
+            document.getElementById('cert_issueDateHijri').value = toHijriDate(todayStr);
+
+            const expiry = addOneYear(today);
+            const expiryStr = expiry.toISOString().split('T')[0];
+            document.getElementById('cert_expiryDateGregorian').value = expiryStr;
+            document.getElementById('cert_expiryDateHijri').value = toHijriDate(expiryStr);
+
+            const programEndDate = addThreeYears(today);
+            const programEndDateStr = programEndDate.toISOString().split('T')[0];
+            document.getElementById('cert_programEndDate').value = programEndDateStr;
+        }
+
+        document.getElementById('cert_issueDateGregorian').addEventListener('change', function() {
+            document.getElementById('cert_issueDateHijri').value = toHijriDate(this.value);
+            const expiry = addOneYear(new Date(this.value));
+            const expiryStr = expiry.toISOString().split('T')[0];
+            document.getElementById('cert_expiryDateGregorian').value = expiryStr;
+            document.getElementById('cert_expiryDateHijri').value = toHijriDate(expiryStr);
+            
+            const programEndDate = addThreeYears(new Date(this.value));
+            const programEndDateStr = programEndDate.toISOString().split('T')[0];
+            document.getElementById('cert_programEndDate').value = programEndDateStr;
+        });
+
+        async function displayCertificates() {
+            try {
+                // First load from LocalStorage for immediate display
+                let certificates = JSON.parse(localStorage.getItem('certificates') || '[]');
+                certificates.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+                
+                // Render immediately from cache
+                if (certificates.length === 0) {
+                    certList.innerHTML = '<div class="empty-state">لا توجد شهادات مضافة حالياً.<br><br>قم بإنشاء شهادة جديدة من النموذج أعلاه</div>';
+                } else {
+                    renderCertList(certificates);
+                }
+                window._cachedCertificates = certificates;
+
+                // Then try to load from Neon Postgres in background and update
+                if (typeof sql !== 'undefined') {
+                    (async () => {
+                        try {
+                            const results = await sql`SELECT * FROM certificates ORDER BY created_at DESC`;
+                            // Map snake_case to camelCase
+                            const dbCertificates = results.map(row => ({
+                                id: row.id,
+                                amanah: row.amanah,
+                                amanahLogo: row.amanah_logo,
+                                municipality: row.municipality,
+                                municipalityLogo: row.municipality_logo,
+                                name: row.name,
+                                idNumber: row.id_number,
+                                gender: row.gender,
+                                nationality: row.nationality,
+                                certNumber: row.cert_number,
+                                job: row.job,
+                                issueDateHijri: row.issue_date_hijri,
+                                issueDateGregorian: row.issue_date_gregorian,
+                                expiryDateHijri: row.expiry_date_hijri,
+                                expiryDateGregorian: row.expiry_date_gregorian,
+                                profileImage: row.profile_image,
+                                establishmentName: row.establishment_name,
+                                establishmentNumber: row.establishment_number,
+                                licenseNumber: row.license_number,
+                                programType: row.program_type,
+                                programEndDate: row.program_end_date,
+                                createdAt: row.created_at
+                            }));
+                            
+                            // Update cache and display if different
+                            if (dbCertificates.length > 0) {
+                                localStorage.setItem('certificates', JSON.stringify(dbCertificates));
+                                window._cachedCertificates = dbCertificates;
+                                renderCertList(dbCertificates);
+                            }
+                            console.log('Loaded from Neon Postgres and updated');
+                        } catch (e) {
+                            console.error('Neon load failed, using cache:', e);
+                        }
+                    })();
+                }
+            } catch (err) {
+                console.error('Failed to load certificates:', err);
+                certList.innerHTML = '<div class="empty-state">تعذّر تحميل الشهادات.</div>';
+            }
+        }
+
+        function downloadJSON(data, filename) {
+            const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }
+
+        function renderCertList(certificates) {
+            if (certificates.length === 0) {
+                certList.innerHTML = '<div class="empty-state">لا توجد شهادات مضافة حالياً.<br><br>قم بإنشاء شهادة جديدة من النموذج أعلاه</div>';
+                return;
+            }
+
+            let html = '';
+
+            certificates.forEach(cert => {
+                const viewUrl = `/veir/services.balady.gov.sa/health/issue/PrintedLicenses.html?id=${encodeURIComponent(cert.id)}`;
+                const certUrl = `/certificate.html?id=${encodeURIComponent(cert.id)}`;
+                html += `
+                    <div class="cert-list-item">
+                        <div class="cert-info">
+                            <div class="cert-name">${cert.name || ''}</div>
+                            <div class="cert-id">رقم الشهادة: ${cert.certNumber || ''} | التاريخ: ${cert.issueDateGregorian || ''}</div>
+                            <div style="font-size: 10px; color: #999;">ID: ${cert.id}</div>
+                        </div>
+                        <div class="actions">
+                            <a href="${certUrl}" target="_blank" class="btn btn-success btn-sm">🖨️ طباعة وعرض</a>
+                            <button type="button" data-action="edit" data-id="${cert.id}" class="btn btn-primary btn-sm">✏️ تحرير</button>
+                            <button type="button" data-action="delete" data-id="${cert.id}" class="btn btn-danger btn-sm">🗑️ حذف</button>
+                        </div>
+                    </div>
+                `;
+            });
+            certList.innerHTML = html;
+        }
+
+        function downloadSingleCertificate(certId) {
+            const certificates = JSON.parse(localStorage.getItem('certificates') || '[]');
+            const cert = certificates.find(c => String(c.id) === String(certId));
+            if (cert) {
+                const filename = `certificate_${cert.certNumber || cert.id}.json`;
+                downloadJSON(cert, filename);
+            } else {
+                openAlertModal('خطأ', 'لم يتم العثور على الشهادة.');
+            }
+        }
+
+        function downloadAllCertificates() {
+            const certificates = JSON.parse(localStorage.getItem('certificates') || '[]');
+            const filename = `all_certificates_${new Date().toISOString().split('T')[0]}.json`;
+            downloadJSON(certificates, filename);
+        }
+
+        function upsertCertificateCache(cert) {
+            const certificates = JSON.parse(localStorage.getItem('certificates') || '[]');
+            const idx = certificates.findIndex(c => (c.id || '') === (cert.id || ''));
+            if (idx >= 0) {
+                certificates[idx] = cert;
+            } else {
+                certificates.push(cert);
+            }
+            localStorage.setItem('certificates', JSON.stringify(certificates));
+            
+            // Also save to our dedicated cache
+            if (cert.certNumber) {
+                saveToCache(cert.certNumber, cert);
+            }
+            if (cert.id) {
+                saveToCache(cert.id, cert);
+            }
+            if (cert.idNumber) {
+                saveToCache(cert.idNumber, cert);
+            }
+        }
+
+        function removeCertificateCache(id) {
+            // Get the certificate before deleting it
+            const certificates = JSON.parse(localStorage.getItem('certificates') || '[]');
+            const certToDelete = certificates.find(c => (c.id || '') === id);
+            
+            // Delete from the array
+            const filteredCertificates = certificates.filter(c => (c.id || '') !== id);
+            localStorage.setItem('certificates', JSON.stringify(filteredCertificates));
+            
+            // Also remove from our dedicated cache
+            if (certToDelete) {
+                if (certToDelete.certNumber) {
+                    localStorage.removeItem(getCacheKey(certToDelete.certNumber));
+                }
+                if (certToDelete.id) {
+                    localStorage.removeItem(getCacheKey(certToDelete.id));
+                }
+                if (certToDelete.idNumber) {
+                    localStorage.removeItem(getCacheKey(certToDelete.idNumber));
+                }
+            }
+        }
+
+        async function uploadProfileImageIfNeeded(profileImg, certId) {
+            if (!profileImg || profileImg.includes('user-default.png')) return 'https://apps.balady.gov.sa/BALADYCDN/Content/images/user-default.png';
+            if (!profileImg.startsWith('data:')) return profileImg;
+            
+            if (window.firebaseDisabled || !window.storage) {
+                console.log('Firebase disabled or storage not ready, using data URL for profile image.');
+                return profileImg;
+            }
+            
+            try {
+                const ref = window.storage.ref('profileImages/' + certId);
+                await ref.putString(profileImg, 'data_url');
+                return await ref.getDownloadURL();
+            } catch (err) {
+                console.error('Image upload failed, falling back to data URL:', err);
+                return profileImg;
+            }
+        }
+
+        let editingCertId = null;
+
+        certForm.addEventListener('submit', (e) => {
+            e.preventDefault();
+
+            const profileImg = document.getElementById('imgPreview').src;
+            const selectedAmanahName = document.getElementById('cert_amanah').value;
+            const selectedAmanah = dropdownData.amanah.find(a => a.name === selectedAmanahName);
+            const amanahLogo = selectedAmanah ? selectedAmanah.logo : '';
+
+            const selectedMunicipalityName = document.getElementById('cert_municipality').value;
+            const selectedMunicipality = dropdownData.municipality.find(m => m.name === selectedMunicipalityName);
+            const municipalityLogo = selectedMunicipality ? selectedMunicipality.logo : '';
+
+            const isEditing = !!editingCertId;
+            const generatedId = isEditing ? editingCertId : generateCertNumber();
+
+            const newCert = {
+                id: generatedId,
+                amanah: selectedAmanahName,
+                amanahLogo: amanahLogo,
+                municipality: selectedMunicipalityName,
+                municipalityLogo: municipalityLogo,
+                name: document.getElementById('cert_name').value,
+                idNumber: document.getElementById('cert_idNumber').value,
+                gender: document.getElementById('cert_gender').value,
+                nationality: document.getElementById('cert_nationality').value,
+                certNumber: document.getElementById('cert_certNumber').value || generatedId,
+                job: document.getElementById('cert_job').value,
+                issueDateHijri: document.getElementById('cert_issueDateHijri').value,
+                issueDateGregorian: document.getElementById('cert_issueDateGregorian').value,
+                expiryDateHijri: document.getElementById('cert_expiryDateHijri').value,
+                expiryDateGregorian: document.getElementById('cert_expiryDateGregorian').value,
+                profileImage: profileImg,
+                establishmentName: document.getElementById('cert_establishmentName').value,
+                establishmentNumber: document.getElementById('cert_establishmentNumber').value,
+                licenseNumber: document.getElementById('cert_licenseNumber').value,
+                programType: document.getElementById('cert_program').value,
+                programEndDate: document.getElementById('cert_programEndDate').value,
+                createdAt: new Date().toISOString()
+            };
+                    
+            upsertCertificateCache(newCert);
+
+            const wasEditing = isEditing;
+            editingCertId = null;
+            const submitBtn = certForm.querySelector('button[type="submit"]');
+            if (submitBtn) submitBtn.textContent = '✨ إنشاء الشهادة';
+            const cancelBtn = document.getElementById('cancelEditBtn');
+            if (cancelBtn) cancelBtn.style.display = 'none';
+
+            certForm.reset();
+            document.getElementById('imgPreview').style.display = 'none';
+            document.getElementById('fileLabel').style.display = 'flex';
+            setInitialDates();
+            document.getElementById('cert_certNumber').value = generateCertNumber();
+
+            displayCertificates();
+
+            if (wasEditing) {
+                openAlertModal('تم التحديث', 'تم تحديث بيانات الشهادة بنجاح.');
+            } else {
+                openAlertModal('تم بنجاح', 'تم إنشاء الشهادة الصحية بنجاح. سيتم توجيهك الآن لعرضها.');
+                setTimeout(() => {
+                    window.location.href = 'certificate?id=' + generatedId;
+                }, 1500);
+            }
+        });
+
+        window.viewCert = function(id) {
+            window.location.href = 'certificate?id=' + id;
+        };
+
+        window.createDemoCertificate = async function() {
+            const generatedId = generateCertNumber();
+            try {
+                const ready = await window.firebaseReady;
+                const db = window.db || (ready && ready.db);
+                const isDisabled = window.firebaseDisabled || !db;
+
+                const demoCert = {
+                    id: generatedId,
+                    amanah: (dropdownData.amanah[0] && dropdownData.amanah[0].name) || 'أمانة منطقة الرياض',
+                    amanahLogo: (dropdownData.amanah[0] && dropdownData.amanah[0].logo) || '',
+                    municipality: (dropdownData.municipality[0] && dropdownData.municipality[0].name) || 'بلدية الدرعية',
+                    municipalityLogo: (dropdownData.municipality[0] && dropdownData.municipality[0].logo) || '',
+                    name: 'محمد بن عبدالله العتيبي',
+                    idNumber: '109' + Math.floor(Math.random() * 9000000),
+                    gender: 'ذكر',
+                    nationality: 'سعودي',
+                    certNumber: generatedId,
+                    job: (dropdownData.job[0] && dropdownData.job[0].name) || 'عامل مطعم',
+                    issueDateHijri: toHijriDate(new Date().toISOString().split('T')[0]),
+                    issueDateGregorian: new Date().toISOString().split('T')[0],
+                    expiryDateHijri: toHijriDate(addOneYear(new Date()).toISOString().split('T')[0]),
+                    expiryDateGregorian: addOneYear(new Date()).toISOString().split('T')[0],
+                    profileImage: 'background/sacond.jpg',
+                    establishmentName: 'مطعم مذاق الجزيرة',
+                    establishmentNumber: '700' + Math.floor(Math.random() * 9000000),
+                    licenseNumber: '4400' + Math.floor(Math.random() * 900000),
+                    programType: (dropdownData.program[0] && dropdownData.program[0].name) || 'منشآت الغذاء',
+                    programEndDate: addThreeYears(new Date()).toISOString().split('T')[0],
+                    createdAt: new Date().toISOString()
+                };
+
+                // Save to Neon Postgres
+                if (typeof sql !== 'undefined') {
+                    try {
+                        await sql`
+                            INSERT INTO certificates (
+                                id, amanah, amanah_logo, municipality, municipality_logo, 
+                                name, id_number, gender, nationality, cert_number, job, 
+                                issue_date_hijri, issue_date_gregorian, expiry_date_hijri, 
+                                expiry_date_gregorian, profile_image, establishment_name, 
+                                establishment_number, license_number, program_type, program_end_date
+                            ) VALUES (
+                                ${demoCert.id}, ${demoCert.amanah}, ${demoCert.amanahLogo}, 
+                                ${demoCert.municipality}, ${demoCert.municipalityLogo}, 
+                                ${demoCert.name}, ${demoCert.idNumber}, ${demoCert.gender}, 
+                                ${demoCert.nationality}, ${demoCert.certNumber}, ${demoCert.job}, 
+                                ${demoCert.issueDateHijri}, ${demoCert.issueDateGregorian}, 
+                                ${demoCert.expiryDateHijri}, ${demoCert.expiryDateGregorian}, 
+                                ${demoCert.profileImage}, ${demoCert.establishmentName}, 
+                                ${demoCert.establishmentNumber}, ${demoCert.licenseNumber}, 
+                                ${demoCert.programType}, ${demoCert.programEndDate}
+                            )
+                        `;
+                        console.log('Demo saved to Neon Postgres');
+                    } catch (e) {
+                        console.error('Neon demo save failed:', e);
+                    }
+                }
+
+                // Save to Firebase if enabled
+                if (!isDisabled) {
+                    try {
+                        await db.collection('certificates').doc(generatedId).set({
+                            ...demoCert,
+                            createdAt: demoCert.createdAt
+                        });
+                    } catch (e) {
+                        console.error('Firebase demo save failed:', e);
+                    }
+                }
+                
+                upsertCertificateCache(demoCert);
+                displayCertificates();
+                openAlertModal('تم بنجاح', 'تم إنشاء شهادة تجريبية وسيتم توجيهك الآن لعرضها.');
+                setTimeout(() => {
+                    window.location.href = 'certificate?id=' + generatedId;
+                }, 1200);
+            } catch (err) {
+                console.error('Failed to create demo certificate:', err);
+                openAlertModal('خطأ', 'تعذر إنشاء الشهادة التجريبية. حاول مجدداً.');
+            }
+        };
+
+        window.deleteCert = function(id) {
+            openConfirmModal('حذف شهادة', 'هل أنت متأكد من حذف هذه الشهادة؟', async () => {
+                try {
+                    removeCertificateCache(id);
+                    displayCertificates();
+                } catch (err) {
+                    console.error('Failed to delete certificate:', err);
+                    openAlertModal('خطأ', 'تعذّر حذف الشهادة. حاول مجدداً.');
+                }
+            });
+        };
+
+        window.editCert = function(id) {
+            const certs = window._cachedCertificates || JSON.parse(localStorage.getItem('certificates') || '[]');
+            const cert = certs.find(c => String(c.id) === String(id));
+            if (!cert) {
+                openAlertModal('خطأ', 'لم يتم العثور على بيانات الشهادة.');
+                return;
+            }
+
+            editingCertId = cert.id;
+
+            const setVal = (id, v) => { const el = document.getElementById(id); if (el) el.value = v || ''; };
+            setVal('cert_amanah', cert.amanah);
+            setVal('cert_municipality', cert.municipality);
+            setVal('cert_name', cert.name);
+            setVal('cert_idNumber', cert.idNumber);
+            setVal('cert_gender', cert.gender);
+            setVal('cert_nationality', cert.nationality);
+            setVal('cert_certNumber', cert.certNumber);
+            setVal('cert_job', cert.job);
+            setVal('cert_issueDateHijri', cert.issueDateHijri);
+            setVal('cert_issueDateGregorian', cert.issueDateGregorian);
+            setVal('cert_expiryDateHijri', cert.expiryDateHijri);
+            setVal('cert_expiryDateGregorian', cert.expiryDateGregorian);
+            setVal('cert_establishmentName', cert.establishmentName);
+            setVal('cert_establishmentNumber', cert.establishmentNumber);
+            setVal('cert_licenseNumber', cert.licenseNumber);
+            setVal('cert_program', cert.programType);
+            setVal('cert_programEndDate', cert.programEndDate);
+
+            const imgPreview = document.getElementById('imgPreview');
+            const fileLabel = document.getElementById('fileLabel');
+            if (cert.profileImage) {
+                imgPreview.src = cert.profileImage;
+                imgPreview.style.display = 'block';
+                if (fileLabel) fileLabel.style.display = 'none';
+                
+                // إضافة خيار لتغيير الصورة عند التحرير
+                const existingChangeBtn = document.getElementById('changeImgDuringEdit');
+                if (existingChangeBtn) existingChangeBtn.remove();
+                
+                const changeBtn = document.createElement('button');
+                changeBtn.id = 'changeImgDuringEdit';
+                changeBtn.type = 'button';
+                changeBtn.className = 'btn btn-outline-primary btn-sm mt-2';
+                changeBtn.innerHTML = '🔄 تغيير الصورة';
+                changeBtn.onclick = () => {
+                    const fileInput = document.getElementById('cert_profileImage');
+                    if (fileInput) fileInput.click();
+                };
+                imgPreview.parentNode.appendChild(changeBtn);
+            } else {
+                imgPreview.style.display = 'none';
+                if (fileLabel) fileLabel.style.display = 'flex';
+                const existingChangeBtn = document.getElementById('changeImgDuringEdit');
+                if (existingChangeBtn) existingChangeBtn.remove();
+            }
+
+            const submitBtn = certForm.querySelector('button[type="submit"]');
+            if (submitBtn) submitBtn.textContent = '💾 حفظ التعديلات';
+            const cancelBtn = document.getElementById('cancelEditBtn');
+            if (cancelBtn) cancelBtn.style.display = 'inline-block';
+
+            certForm.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        };
+
+        window.cancelEdit = function() {
+            editingCertId = null;
+            certForm.reset();
+            document.getElementById('imgPreview').style.display = 'none';
+            document.getElementById('fileLabel').style.display = 'flex';
+            const changeBtn = document.getElementById('changeImgDuringEdit');
+            if (changeBtn) changeBtn.remove();
+            setInitialDates();
+            document.getElementById('cert_certNumber').value = generateCertNumber();
+            const submitBtn = certForm.querySelector('button[type="submit"]');
+            if (submitBtn) submitBtn.textContent = '✨ إنشاء الشهادة';
+            const cancelBtn = document.getElementById('cancelEditBtn');
+            if (cancelBtn) cancelBtn.style.display = 'none';
+        };
+
+        window.downloadSingleCertificate = downloadSingleCertificate;
+        window.downloadAllCertificates = downloadAllCertificates;
+
+        function uploadJSONFile(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+            
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                try {
+                    const certificates = JSON.parse(e.target.result);
+                    if (Array.isArray(certificates)) {
+                        localStorage.setItem('certificates', JSON.stringify(certificates));
+                        certificates.forEach(cert => {
+                            if (cert.certNumber) saveToCache(cert.certNumber, cert);
+                            if (cert.id) saveToCache(cert.id, cert);
+                            if (cert.idNumber) saveToCache(cert.idNumber, cert);
+                        });
+                        displayCertificates();
+                        openAlertModal('تم بنجاح', 'تم تحميل البيانات من ملف JSON بنجاح!');
+                    } else {
+                        openAlertModal('خطأ', 'الملف يجب أن يحتوي على مصفوفة من الشهادات.');
+                    }
+                } catch (err) {
+                    console.error('Error parsing JSON:', err);
+                    openAlertModal('خطأ', 'فشل تحليل ملف JSON.');
+                }
+            };
+            reader.readAsText(file);
+            event.target.value = '';
+        }
+
+        window.uploadJSONFile = uploadJSONFile;
+
+        async function initApp() {
+            // Show UI immediately without waiting
+            setInitialDates();
+            document.getElementById('cert_certNumber').value = generateCertNumber();
+            
+            // Load database in background
+            setupDatabase();
+            
+            // Load dropdown data and certificates in parallel
+            Promise.all([
+                loadDropdownData().then(() => {
+                    renderManagementLists();
+                    refreshDropdowns();
+                }),
+                displayCertificates()
+            ]).catch(err => console.error('Loading error:', err));
+        }
+        initApp();
+
+        // تحويل الأرقام العربية والفارسية تلقائياً إلى أرقام إنجليزية في كل حقول الإدخال
+        function arabicToEnglishDigits(str) {
+            if (str == null) return str;
+            return String(str)
+                .replace(/[\u0660-\u0669]/g, d => String(d.charCodeAt(0) - 0x0660))
+                .replace(/[\u06F0-\u06F9]/g, d => String(d.charCodeAt(0) - 0x06F0));
+        }
+
+        document.addEventListener('input', function(e) {
+            const t = e.target;
+            if (!t || !(t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement)) return;
+            const type = (t.type || '').toLowerCase();
+            if (['file', 'checkbox', 'radio', 'date', 'color', 'range'].includes(type)) return;
+            const original = t.value;
+            const converted = arabicToEnglishDigits(original);
+            if (converted !== original) {
+                const start = t.selectionStart;
+                const end = t.selectionEnd;
+                t.value = converted;
+                try { t.setSelectionRange(start, end); } catch (_) {}
+            }
+        }, true);
+    </script>
+
+    <!-- Modal لتعديل الاسم -->
+    <div id="editModal" class="modal-overlay">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h4>تعديل الاسم</h4>
+                <button class="modal-close" onclick="closeEditModal()">&times;</button>
+            </div>
+            <div class="p-3">
+                <input type="text" id="editItemName" class="form-control mb-3">
+                <div class="text-end">
+                    <button class="btn btn-secondary btn-sm" onclick="closeEditModal()">إلغاء</button>
+                    <button class="btn btn-primary btn-sm" onclick="saveEditedItem()">حفظ التغييرات</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal للتأكيد -->
+    <div id="confirmModal" class="modal-overlay">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h4 id="confirmTitle">تأكيد</h4>
+                <button class="modal-close" onclick="closeConfirmModal()">&times;</button>
+            </div>
+            <div class="p-3">
+                <p id="confirmMessage"></p>
+                <div class="text-end">
+                    <button class="btn btn-secondary btn-sm" onclick="closeConfirmModal()">إلغاء</button>
+                    <button class="btn btn-danger btn-sm" id="confirmActionBtn">تأكيد</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal للتنبيه -->
+    <div id="alertModal" class="modal-overlay">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h4 id="alertTitle">تنبيه</h4>
+                <button class="modal-close" onclick="closeAlertModal()">&times;</button>
+            </div>
+            <div class="p-3">
+                <p id="alertMessage"></p>
+                <div class="text-end">
+                    <button class="btn btn-primary btn-sm" onclick="closeAlertModal()">حسناً</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentEditInfo = null;
+        let confirmCallback = null;
+
+        function openAlertModal(title, message) {
+            document.getElementById('alertTitle').textContent = title;
+            document.getElementById('alertMessage').textContent = message;
+            document.getElementById('alertModal').classList.add('show');
+        }
+
+        function closeAlertModal() {
+            document.getElementById('alertModal').classList.remove('show');
+        }
+
+        function openConfirmModal(title, message, callback, isDanger = true) {
+            document.getElementById('confirmTitle').textContent = title;
+            document.getElementById('confirmMessage').textContent = message;
+            confirmCallback = callback;
+            
+            const actionBtn = document.getElementById('confirmActionBtn');
+            actionBtn.className = isDanger ? 'btn btn-danger btn-sm' : 'btn btn-success btn-sm';
+            actionBtn.onclick = () => {
+                if (confirmCallback) confirmCallback();
+                closeConfirmModal();
+            };
+            
+            document.getElementById('confirmModal').classList.add('show');
+        }
+
+        function closeConfirmModal() {
+            document.getElementById('confirmModal').classList.remove('show');
+            confirmCallback = null;
+        }
+
+        function openEditModal(type, index) {
+            const item = dropdownData[type][index];
+            currentEditInfo = { type, index };
+            document.getElementById('editItemName').value = item.name;
+            document.getElementById('editModal').classList.add('show');
+        }
+
+        function closeEditModal() {
+            document.getElementById('editModal').classList.remove('show');
+            currentEditInfo = null;
+        }
+
+        function saveEditedItem() {
+            if (!currentEditInfo) return;
+            
+            const newName = document.getElementById('editItemName').value.trim();
+            if (newName === '') {
+                openAlertModal('تنبيه', 'الاسم لا يمكن أن يكون فارغاً');
+                return;
+            }
+
+            const { type, index } = currentEditInfo;
+            const item = dropdownData[type][index];
+            item.name = newName;
+
+            if (type === 'amanah' || type === 'municipality') {
+                openConfirmModal('تغيير الشعار', 'هل تريد تغيير الشعار أيضاً؟', () => {
+                    const fileInput = document.createElement('input');
+                    fileInput.type = 'file';
+                    fileInput.accept = 'image/*';
+                    fileInput.onchange = e => {
+                        const file = e.target.files[0];
+                        if (file) {
+                            const reader = new FileReader();
+                            reader.onload = event => {
+                                item.logo = event.target.result;
+                                finalizeEdit();
+                            };
+                            reader.readAsDataURL(file);
+                        }
+                    };
+                    fileInput.click();
+                    closeEditModal();
+                }, false); // Not a danger action
+                return;
+            }
+            
+            finalizeEdit();
+        }
+
+        async function finalizeEdit() {
+            const { type, index } = currentEditInfo;
+            const item = dropdownData[type][index];
+            
+            if (item.id && typeof sql !== 'undefined') {
+                try {
+                    await sql`UPDATE dropdown_items SET name = ${item.name}, logo = ${item.logo || ''} WHERE id = ${item.id}`;
+                } catch (e) {
+                    console.error('Failed to update item in Neon:', e);
+                }
+            }
+            
+            saveDropdownData();
+            renderManagementLists();
+            refreshDropdowns();
+            closeEditModal();
+        }
+    </script>
+</body>
+</html>
