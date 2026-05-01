@@ -1673,52 +1673,55 @@
                 const westernCertNumber = toWesternNums(certNumber || '').trim();
                 console.log("Searching for certificate:", westernCertNumber);
 
+                if (!westernCertNumber) {
+                    showNotFound('');
+                    $('.preloader.checking').hide();
+                    return;
+                }
+
                 $('.preloader.checking').show();
 
                 try {
-                    // 1. بيانات مُضمّنة في رابط QR نفسه (الأسرع والأكثر موثوقية عبر الأجهزة)
-                    const certFromUrl = loadCertificateFromUrlHash();
-                    if (certFromUrl) {
-                        applyCertToForm(certFromUrl);
-                        if (westernCertNumber) saveToCache(westernCertNumber, certFromUrl);
-                        return;
-                    }
-
-                    if (!westernCertNumber) {
-                        showNotFound('');
-                        return;
-                    }
-
-                    // 2. In-page cache
+                    // 1. LocalStorage - فوري بدون شبكة (cache مباشر)
                     const cachedCert = getFromCache(westernCertNumber);
                     if (cachedCert) {
                         applyCertToForm(cachedCert);
                         return;
                     }
 
-                    // 3. LocalStorage certificates array
-                    if (loadCertificateFromLocalStorage(westernCertNumber)) {
-                        const certFromLocal = JSON.parse(localStorage.getItem('certificates') || '[]')
-                            .find(c => toWesternNums(c.certNumber || '').trim() === westernCertNumber ||
-                                      (c.id || '').trim() === westernCertNumber);
-                        if (certFromLocal) {
-                            saveToCache(westernCertNumber, certFromLocal);
-                        }
+                    // 2. LocalStorage - مصفوفة الشهادات الكاملة
+                    const certificates = JSON.parse(localStorage.getItem('certificates') || '[]');
+                    const certFromLocal = certificates.find(c => {
+                        const storedCertNum = toWesternNums(c.certNumber || '').trim();
+                        const storedId = (c.id || '').trim();
+                        return storedCertNum === westernCertNumber || storedId === westernCertNumber;
+                    });
+                    if (certFromLocal) {
+                        saveToCache(westernCertNumber, certFromLocal);
+                        applyCertToForm(certFromLocal);
                         return;
                     }
 
-                    // 4. Bundled static JSON shipped with the site (same origin, fast)
-                    const found = await loadCertificateFromStaticJson(westernCertNumber);
-                    if (found) {
-                        const certsJson = JSON.parse(localStorage.getItem('certificates') || '[]');
-                        const certObj = certsJson.find(c =>
-                            toWesternNums(c.certNumber || '').trim() === westernCertNumber ||
-                            (c.id || '').trim() === westernCertNumber
-                        );
-                        if (certObj) {
-                            saveToCache(westernCertNumber, certObj);
+                    // 3. ملف JSON الثابت - طلب شبكة واحد سريع
+                    try {
+                        const response = await fetch('/data/certificates.json?t=' + Date.now(), { cache: 'no-store' });
+                        if (response.ok) {
+                            const allCerts = await response.json();
+                            if (Array.isArray(allCerts)) {
+                                const certFromJson = allCerts.find(c => {
+                                    const storedCertNum = toWesternNums(c.certNumber || '').trim();
+                                    const storedId = (c.id || '').trim();
+                                    return storedCertNum === westernCertNumber || storedId === westernCertNumber;
+                                });
+                                if (certFromJson) {
+                                    saveToCache(westernCertNumber, certFromJson);
+                                    applyCertToForm(certFromJson);
+                                    return;
+                                }
+                            }
                         }
-                        return;
+                    } catch (e) {
+                        console.warn('Static JSON load failed:', e);
                     }
 
                     showNotFound(westernCertNumber);
@@ -1730,10 +1733,8 @@
                 }
             }
 
-            let certNumber = getUrlParameter('id') || getUrlParameter('certNumber');
-            // إذا كان الرابط يحتوي على بيانات شهادة مضمّنة، نستدعي التحميل حتى لو لم يوجد certNumber
-            const hasEmbedded = /[#&](c|d)=/.test(window.location.hash || '');
-            if (certNumber || hasEmbedded) {
+            const certNumber = getUrlParameter('id') || getUrlParameter('certNumber');
+            if (certNumber) {
                 loadCertificate(certNumber);
             } else {
                 console.log("No certNumber parameter in URL");
