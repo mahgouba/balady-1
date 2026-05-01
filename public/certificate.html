@@ -521,7 +521,7 @@
             const serverPromise = fetchCertificateFromServer(id).catch(() => null);
 
             try {
-                // 1. Cache فردي في LocalStorage - فوري
+                // 1. Cache فردي في LocalStorage - للعرض السريع (بدون صورة الملف الشخصي)
                 if (!cert) {
                     for (const key of ['cert_cache_' + id, 'cert_cache_' + id.replace(/[^0-9]/g, '')]) {
                         try {
@@ -537,87 +537,35 @@
                     }
                 }
 
-                // 2. مصفوفة certificates في LocalStorage - فوري
-                if (!cert) {
-                    const certificates = JSON.parse(localStorage.getItem('certificates') || '[]');
-                    cert = certificates.find(c => String(c.id) === String(id) || String(c.certNumber) === String(id));
-                }
-
-                // 3. Server API - await للنتيجة
-                if (!cert) {
-                    const row = await serverPromise;
-                    if (row) {
-                        cert = {
-                            id: row.id,
-                            amanah: row.amanah,
-                            amanahLogo: row.amanah_logo,
-                            municipality: row.municipality,
-                            municipalityLogo: row.municipality_logo,
-                            name: row.name,
-                            idNumber: row.id_number,
-                            gender: row.gender,
-                            nationality: row.nationality,
-                            certNumber: row.cert_number,
-                            job: row.job,
-                            issueDateHijri: row.issue_date_hijri,
-                            issueDateGregorian: row.issue_date_gregorian,
-                            expiryDateHijri: row.expiry_date_hijri,
-                            expiryDateGregorian: row.expiry_date_gregorian,
-                            profileImage: row.profile_image,
-                            establishmentName: row.establishment_name,
-                            establishmentNumber: row.establishment_number,
-                            licenseNumber: row.license_number,
-                            programType: row.program_type,
-                            programEndDate: row.program_end_date,
-                            createdAt: row.created_at
-                        };
-                        if (cert) saveCertToCache(cert);
-                    }
-                }
-
-                // 4. Try Firebase if not found in Neon or LocalStorage
-                if (!cert) {
-                    try {
-                        const ready = await window.firebaseReady;
-                        const db = window.db || (ready && ready.db);
-                        if (db) {
-                            const docSnap = await db.collection('certificates').doc(id).get();
-                            if (docSnap.exists) {
-                                cert = docSnap.data();
-                            } else {
-                                const querySnap = await db.collection('certificates')
-                                    .where('certNumber', '==', id)
-                                    .limit(1)
-                                    .get();
-                                if (!querySnap.empty) {
-                                    cert = querySnap.docs[0].data();
-                                }
-                            }
-                            if (cert) {
-                                console.log('Loaded from Firebase');
-                                saveCertToCache(cert);
-                            }
-                        }
-                    } catch (e) {
-                        console.error('Firebase load failed:', e);
-                    }
-                }
-
-                // 5. Try static JSON as final fallback
-                if (!cert) {
-                    try {
-                        const response = await fetch('/data/certificates.json?t=' + Date.now(), { cache: 'no-store' });
-                        if (response.ok) {
-                            const certificates = await response.json();
-                            cert = certificates.find(c => c.id === id || c.certNumber === id);
-                            if (cert) {
-                                console.log('Loaded from static JSON');
-                                saveCertToCache(cert);
-                            }
-                        }
-                    } catch (e) {
-                        console.warn('Static JSON load failed:', e);
-                    }
+                // 2. Server API - دائماً يُنفَّذ للحصول على الصورة الكاملة
+                const row = await serverPromise;
+                if (row) {
+                    const serverCert = {
+                        id: row.id,
+                        amanah: row.amanah,
+                        amanahLogo: row.amanah_logo,
+                        municipality: row.municipality,
+                        municipalityLogo: row.municipality_logo,
+                        name: row.name,
+                        idNumber: row.id_number,
+                        gender: row.gender,
+                        nationality: row.nationality,
+                        certNumber: row.cert_number,
+                        job: row.job,
+                        issueDateHijri: row.issue_date_hijri,
+                        issueDateGregorian: row.issue_date_gregorian,
+                        expiryDateHijri: row.expiry_date_hijri,
+                        expiryDateGregorian: row.expiry_date_gregorian,
+                        profileImage: row.profile_image,
+                        establishmentName: row.establishment_name,
+                        establishmentNumber: row.establishment_number,
+                        licenseNumber: row.license_number,
+                        programType: row.program_type,
+                        programEndDate: row.program_end_date,
+                        createdAt: row.created_at
+                    };
+                    saveCertToCache(serverCert);
+                    cert = serverCert; // server is authoritative
                 }
 
                 if (cert) {
