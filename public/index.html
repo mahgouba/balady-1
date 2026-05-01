@@ -124,7 +124,7 @@
                 localStorage.setItem(cacheKey, JSON.stringify(data));
                 console.log('Cached certificate:', certNumber);
             } catch (e) {
-                console.error('Cache save error:', e);
+                console.warn('Cache save skipped:', e.message);
             }
         }
 
@@ -719,19 +719,15 @@
 
         async function displayCertificates() {
             try {
-                // First load from LocalStorage for immediate display
-                let certificates = JSON.parse(localStorage.getItem('certificates') || '[]');
-                certificates.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-                
-                // Render immediately from cache
-                if (certificates.length === 0) {
-                    certList.innerHTML = '<div class="empty-state">لا توجد شهادات مضافة حالياً.<br><br>قم بإنشاء شهادة جديدة من النموذج أعلاه</div>';
+                // Use in-memory cache for immediate display
+                const cached = window._cachedCertificates || [];
+                if (cached.length === 0) {
+                    certList.innerHTML = '<div class="empty-state">جاري التحميل...</div>';
                 } else {
-                    renderCertList(certificates);
+                    renderCertList(cached);
                 }
-                window._cachedCertificates = certificates;
 
-                // Then load from server API and update
+                // Then load from server API and update (in-memory only, no localStorage)
                 (async () => {
                     try {
                         const results = await api.getCertificates();
@@ -759,7 +755,6 @@
                             programEndDate: row.program_end_date,
                             createdAt: row.created_at
                         }));
-                        localStorage.setItem('certificates', JSON.stringify(dbCertificates));
                         window._cachedCertificates = dbCertificates;
                         renderCertList(dbCertificates);
                         console.log('Loaded from server and updated');
@@ -815,7 +810,7 @@
         }
 
         function downloadSingleCertificate(certId) {
-            const certificates = JSON.parse(localStorage.getItem('certificates') || '[]');
+            const certificates = window._cachedCertificates || [];
             const cert = certificates.find(c => String(c.id) === String(certId));
             if (cert) {
                 const filename = `certificate_${cert.certNumber || cert.id}.json`;
@@ -826,53 +821,41 @@
         }
 
         function downloadAllCertificates() {
-            const certificates = JSON.parse(localStorage.getItem('certificates') || '[]');
+            const certificates = window._cachedCertificates || [];
             const filename = `all_certificates_${new Date().toISOString().split('T')[0]}.json`;
             downloadJSON(certificates, filename);
         }
 
         function upsertCertificateCache(cert) {
-            const certificates = JSON.parse(localStorage.getItem('certificates') || '[]');
-            const idx = certificates.findIndex(c => (c.id || '') === (cert.id || ''));
+            // Update in-memory cache only (avoid localStorage overflow from large base64 images)
+            if (!window._cachedCertificates) window._cachedCertificates = [];
+            const idx = window._cachedCertificates.findIndex(c => (c.id || '') === (cert.id || ''));
             if (idx >= 0) {
-                certificates[idx] = cert;
+                window._cachedCertificates[idx] = cert;
             } else {
-                certificates.push(cert);
+                window._cachedCertificates.push(cert);
             }
-            localStorage.setItem('certificates', JSON.stringify(certificates));
-            
-            // Also save to our dedicated cache
-            if (cert.certNumber) {
-                saveToCache(cert.certNumber, cert);
-            }
-            if (cert.id) {
-                saveToCache(cert.id, cert);
-            }
-            if (cert.idNumber) {
-                saveToCache(cert.idNumber, cert);
+
+            // Save a lightweight version (no profile image) to localStorage per-cert cache
+            const slim = Object.assign({}, cert, { profileImage: '' });
+            try {
+                if (cert.certNumber) saveToCache(cert.certNumber, slim);
+                if (cert.id) saveToCache(cert.id, slim);
+                if (cert.idNumber) saveToCache(cert.idNumber, slim);
+            } catch (e) {
+                console.warn('Cache save skipped:', e.message);
             }
         }
 
         function removeCertificateCache(id) {
-            // Get the certificate before deleting it
-            const certificates = JSON.parse(localStorage.getItem('certificates') || '[]');
-            const certToDelete = certificates.find(c => (c.id || '') === id);
-            
-            // Delete from the array
-            const filteredCertificates = certificates.filter(c => (c.id || '') !== id);
-            localStorage.setItem('certificates', JSON.stringify(filteredCertificates));
-            
-            // Also remove from our dedicated cache
+            if (!window._cachedCertificates) window._cachedCertificates = [];
+            const certToDelete = window._cachedCertificates.find(c => (c.id || '') === id);
+            window._cachedCertificates = window._cachedCertificates.filter(c => (c.id || '') !== id);
+
             if (certToDelete) {
-                if (certToDelete.certNumber) {
-                    localStorage.removeItem(getCacheKey(certToDelete.certNumber));
-                }
-                if (certToDelete.id) {
-                    localStorage.removeItem(getCacheKey(certToDelete.id));
-                }
-                if (certToDelete.idNumber) {
-                    localStorage.removeItem(getCacheKey(certToDelete.idNumber));
-                }
+                if (certToDelete.certNumber) localStorage.removeItem(getCacheKey(certToDelete.certNumber));
+                if (certToDelete.id) localStorage.removeItem(getCacheKey(certToDelete.id));
+                if (certToDelete.idNumber) localStorage.removeItem(getCacheKey(certToDelete.idNumber));
             }
         }
 
@@ -1176,6 +1159,12 @@
         window.uploadJSONFile = uploadJSONFile;
 
         async function initApp() {
+            // One-time cleanup: remove old bloated localStorage keys to free quota
+            try {
+                localStorage.removeItem('certificates');
+                localStorage.removeItem('neon_synced_v2');
+            } catch (e) {}
+
             // Show UI immediately without waiting
             setInitialDates();
             document.getElementById('cert_certNumber').value = generateCertNumber();

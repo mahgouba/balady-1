@@ -67,14 +67,12 @@
         function saveToCache(certNumber, certificate) {
             try {
                 const cacheKey = getCacheKey(certNumber);
-                const data = {
-                    certificate: certificate,
-                    timestamp: Date.now()
-                };
+                // Strip large base64 profile image to avoid localStorage quota errors
+                const slim = Object.assign({}, certificate, { profileImage: '' });
+                const data = { certificate: slim, timestamp: Date.now() };
                 localStorage.setItem(cacheKey, JSON.stringify(data));
-                console.log('Cached certificate:', certNumber);
             } catch (e) {
-                console.error('Cache save error:', e);
+                console.warn('Cache save skipped:', e.message);
             }
         }
 

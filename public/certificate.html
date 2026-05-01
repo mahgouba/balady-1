@@ -504,28 +504,17 @@
             const loading = document.getElementById('loading');
             loading.style.display = 'flex';
 
-            // Helper function to save certificate to cache
+            // Helper function to save certificate to cache (slim version, no large base64 images)
             function saveCertToCache(certificate) {
-                // Save to individual cache keys
-                if (certificate.id) {
-                    localStorage.setItem('cert_cache_' + certificate.id, JSON.stringify({ certificate, timestamp: Date.now() }));
+                const slim = Object.assign({}, certificate, { profileImage: '' });
+                const entry = JSON.stringify({ certificate: slim, timestamp: Date.now() });
+                try {
+                    if (certificate.id) localStorage.setItem('cert_cache_' + certificate.id, entry);
+                    if (certificate.certNumber) localStorage.setItem('cert_cache_' + certificate.certNumber, entry);
+                    if (certificate.idNumber) localStorage.setItem('cert_cache_' + certificate.idNumber, entry);
+                } catch (e) {
+                    console.warn('Cache save skipped:', e.message);
                 }
-                if (certificate.certNumber) {
-                    localStorage.setItem('cert_cache_' + certificate.certNumber, JSON.stringify({ certificate, timestamp: Date.now() }));
-                }
-                if (certificate.idNumber) {
-                    localStorage.setItem('cert_cache_' + certificate.idNumber, JSON.stringify({ certificate, timestamp: Date.now() }));
-                }
-                
-                // Also update the certificates array
-                const certificates = JSON.parse(localStorage.getItem('certificates') || '[]');
-                const idx = certificates.findIndex(c => (c.id || '') === (certificate.id || ''));
-                if (idx >= 0) {
-                    certificates[idx] = certificate;
-                } else {
-                    certificates.push(certificate);
-                }
-                localStorage.setItem('certificates', JSON.stringify(certificates));
             }
 
             // أطلق استعلام API فوراً بالتوازي مع البحث في LocalStorage
