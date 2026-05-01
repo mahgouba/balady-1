@@ -99,6 +99,30 @@
 
         // Clean expired cache on page load
         clearExpiredCache();
+
+        // ===== EARLY FETCH: ابدأ طلب API فوراً قبل تحميل jQuery =====
+        (function () {
+            function _toWest(s) {
+                return (s||'').toString()
+                    .replace(/[٠-٩]/g, function(d){return d.charCodeAt(0)-1632;})
+                    .replace(/[۰-۹]/g, function(d){return d.charCodeAt(0)-1776;});
+            }
+            var params = window.location.search.substring(1).split('&');
+            var certId = null;
+            for (var i = 0; i < params.length; i++) {
+                var p = params[i].split('=');
+                var k = (p[0]||'').toLowerCase();
+                if (k === 'id' || k === 'certnumber') {
+                    certId = decodeURIComponent(p[1] || '').trim();
+                    break;
+                }
+            }
+            if (certId) {
+                certId = _toWest(certId).trim();
+                window._earlyCertId = certId;
+                window._earlyServerPromise = fetchCertificateFromServer(certId);
+            }
+        })();
     </script>
 
 
@@ -1515,14 +1539,14 @@
                 }
 
                 // عرض الصورة الشخصية دائماً
-                const imgSrc = cert.profileImage || 'https://apps.balady.gov.sa/BALADYCDN/Content/images/user-default.png';
+                const imgSrc = cert.profileImage || '/background/default-profile.svg';
                 $('#data-profileImage')
                     .attr('src', imgSrc)
                     .css({'border-radius': '0', 'object-fit': 'cover', 'width': '150px', 'height': '190px', 'border': 'none'})
                     .show()
                     .off('error')
                     .on('error', function() {
-                        $(this).attr('src', 'https://apps.balady.gov.sa/BALADYCDN/Content/images/user-default.png');
+                        $(this).attr('src', '/background/default-profile.svg');
                     });
 
                 const expiryDate = new Date(cert.expiryDateGregorian);
@@ -1712,8 +1736,10 @@
 
                 $('.preloader.checking').show();
 
-                // أطلق استعلام API فوراً في الخلفية (بالتوازي مع البحث في LocalStorage)
-                const serverPromise = fetchCertificateFromServer(westernCertNumber);
+                // استخدم الطلب المُبكّر إن كان متاحاً، وإلا ابدأ طلباً جديداً
+                const serverPromise = (window._earlyServerPromise && window._earlyCertId === westernCertNumber)
+                    ? window._earlyServerPromise
+                    : fetchCertificateFromServer(westernCertNumber);
 
                 try {
                     // 1. cache مباشر - فوري < 1ms
@@ -1803,11 +1829,9 @@
         });
         $(document).ajaxStart(function() {
             $('#messageContainer').remove();
-            $('.preloader.checking').show();
         });
 
         $(document).ajaxStop(function(e, xhr, settings) {
-            $('.preloader.checking').hide();
         });
         $(document).on('change', '.select2', function() {
             $(this).parsley().validate();
