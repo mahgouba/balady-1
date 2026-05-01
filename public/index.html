@@ -12,33 +12,22 @@
     <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <script src="assets/firebase-init.js" defer></script>
     <script src="assets/auth.js" defer></script>
-    <!-- Neon Serverless Driver for Postgres -->
-    <script src="/assets/neon-serverless.js" defer></script>
+    <!-- Neon Serverless Driver for Postgres — بدون defer لضمان التحميل قبل الكود -->
+    <script src="/assets/neon-serverless.js"></script>
     <script>
-        // Store connection string securely in memory (in a real app, this would be on a backend)
         const NEON_CONNECTION_STRING = "postgresql://neondb_owner:npg_4fDRaepF6NLQ@ep-little-shape-antqb07h-pooler.c-6.us-east-1.aws.neon.tech/neondb?sslmode=require";
         
-        // Initialize Neon client with fast retry logic
         let sql;
         let databaseSetupComplete = false;
         try {
             if (typeof neon !== 'undefined') {
-                const client = neon.neon(NEON_CONNECTION_STRING);
-                // Wrapper to handle fetch errors with faster retries
-                sql = async (strings, ...values) => {
-                    let retries = 2;
-                    while (retries > 0) {
-                        try {
-                            return await client(strings, ...values);
-                        } catch (err) {
-                            console.warn(`Neon query failed, retrying (${retries} left):`, err);
-                            retries--;
-                            if (retries === 0) throw err;
-                            await new Promise(r => setTimeout(r, 200)); // wait 200ms instead of 1s
-                        }
-                    }
-                };
-                console.log('Neon Postgres client initialized with fast retry wrapper');
+                const _neonClient = neon.neon(NEON_CONNECTION_STRING);
+                const _withTimeout = (p, ms) =>
+                    Promise.race([p, new Promise((_, r) => setTimeout(() => r(new Error('timeout')), ms))]);
+                sql = (strings, ...values) => _withTimeout(_neonClient(strings, ...values), 6000);
+                console.log('Neon client initialized ✓');
+            } else {
+                console.warn('neon-serverless not loaded');
             }
         } catch (e) {
             console.error('Failed to initialize Neon:', e);

@@ -1730,31 +1730,39 @@
                     FROM certificates
                     WHERE cert_number = ${westernCertNumber} OR id = ${westernCertNumber}
                     LIMIT 1
-                `.catch(() => null) : Promise.resolve(null);
+                `.catch(e => { console.error('Neon query error:', e.message); return null; })
+                : Promise.resolve(null);
+
+                if (!sql) console.warn('sql غير مهيّأ — Neon غير متاح');
 
                 try {
                     // 1. cache مباشر - فوري < 1ms
                     const cachedCert = getFromCache(westernCertNumber);
                     if (cachedCert) {
+                        console.log('✓ من cache');
                         applyCertToForm(cachedCert);
                         return;
                     }
 
                     // 2. LocalStorage - فوري < 1ms
                     const certificates = JSON.parse(localStorage.getItem('certificates') || '[]');
+                    console.log(`LocalStorage: ${certificates.length} شهادة، البحث عن: ${westernCertNumber}`);
                     const certFromLocal = certificates.find(c => {
                         const n = toWesternNums(c.certNumber || '').trim();
                         const i = (c.id || '').trim();
                         return n === westernCertNumber || i === westernCertNumber;
                     });
                     if (certFromLocal) {
+                        console.log('✓ من LocalStorage');
                         saveToCache(westernCertNumber, certFromLocal);
                         applyCertToForm(certFromLocal);
                         return;
                     }
 
                     // 3. Neon - الاستعلام كان يعمل بالتوازي، await للنتيجة فقط
+                    console.log('جاري انتظار Neon...');
                     const rows = await neonPromise;
+                    console.log('Neon أعاد:', rows ? rows.length : 'null', 'صف');
                     if (rows && rows.length > 0) {
                         const certFromDb = rowToCert(rows[0]);
                         saveToCache(westernCertNumber, certFromDb);
