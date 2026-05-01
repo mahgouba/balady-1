@@ -806,7 +806,7 @@
             let html = '';
 
             certificates.forEach(cert => {
-                const viewUrl = `/veir/services.balady.gov.sa/health/issue/PrintedLicenses.html?id=${encodeURIComponent(cert.id)}`;
+                const viewUrl = `/verify/health/issue/PrintedLicenses?id=${encodeURIComponent(cert.id)}`;
                 const certUrl = `/certificate.html?id=${encodeURIComponent(cert.id)}`;
                 html += `
                     <div class="cert-list-item">

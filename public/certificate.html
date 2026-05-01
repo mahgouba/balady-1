@@ -734,7 +734,7 @@
                     // توليد QR Code يوجه إلى صفحة التحقق على الاستضافة الحالية
                     // نضمّن بيانات الشهادة داخل رابط QR نفسه حتى يعمل التحقق من أي جهاز بدون خادم
                     const currentDomain = window.location.origin;
-                    const verifyBaseUrl = currentDomain + '/veir/services.balady.gov.sa/health/issue/PrintedLicenses.html';
+                    const verifyBaseUrl = currentDomain + '/verify/health/issue/PrintedLicenses';
                     const certNum = toWesternNums(cert.certNumber || cert.id) || '';
 
                     // نُجهّز نسخة مُصغّرة من بيانات الشهادة مناسبة لحجم QR
