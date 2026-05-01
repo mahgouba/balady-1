@@ -737,81 +737,19 @@
                     const verifyBaseUrl = currentDomain + '/verify/health/issue/PrintedLicenses';
                     const certNum = toWesternNums(cert.certNumber || cert.id) || '';
 
-                    // نُجهّز نسخة مُصغّرة من بيانات الشهادة مناسبة لحجم QR
-                    function isSmallHttpUrl(v) {
-                        return typeof v === 'string' && /^https?:\/\//i.test(v) && v.length < 300;
-                    }
-                    const compactCert = {
-                        id: cert.id,
-                        amanah: cert.amanah,
-                        amanahLogo: isSmallHttpUrl(cert.amanahLogo) ? cert.amanahLogo : '',
-                        municipality: cert.municipality,
-                        municipalityLogo: isSmallHttpUrl(cert.municipalityLogo) ? cert.municipalityLogo : '',
-                        name: cert.name,
-                        idNumber: cert.idNumber,
-                        gender: cert.gender,
-                        nationality: cert.nationality,
-                        certNumber: cert.certNumber,
-                        job: cert.job,
-                        issueDateHijri: cert.issueDateHijri,
-                        issueDateGregorian: cert.issueDateGregorian,
-                        expiryDateHijri: cert.expiryDateHijri,
-                        expiryDateGregorian: cert.expiryDateGregorian,
-                        programType: cert.programType,
-                        programEndDate: cert.programEndDate,
-                        licenseNumber: cert.licenseNumber,
-                        establishmentName: cert.establishmentName,
-                        establishmentNumber: cert.establishmentNumber
-                        // ملاحظة: لا نُضمّن profileImage في QR لأن حجمها كبير جداً
-                    };
-
-                    // اختصار أسماء الحقول لتقليل حجم الرابط
-                    const KEY_MAP = {id:'i',amanah:'a',amanahLogo:'aL',municipality:'m',municipalityLogo:'mL',name:'n',idNumber:'iN',gender:'g',nationality:'nt',certNumber:'cN',job:'j',issueDateHijri:'iH',issueDateGregorian:'iG',expiryDateHijri:'eH',expiryDateGregorian:'eG',programType:'pT',programEndDate:'pE',licenseNumber:'lN',establishmentName:'eN',establishmentNumber:'eNo'};
-                    const shortCert = {};
-                    for (const k in compactCert) {
-                        if (KEY_MAP[k] && compactCert[k] !== undefined && compactCert[k] !== null && compactCert[k] !== '') {
-                            shortCert[KEY_MAP[k]] = compactCert[k];
-                        }
-                    }
-                    // ضغط البيانات بـ LZ-string ثم ترميز URL-safe (يقلل الحجم ~45%)
-                    let verifyUrl;
-                    if (window.LZString && typeof LZString.compressToEncodedURIComponent === 'function') {
-                        const compressed = LZString.compressToEncodedURIComponent(JSON.stringify(shortCert));
-                        verifyUrl = `${verifyBaseUrl}?certNumber=${encodeURIComponent(certNum)}#c=${compressed}`;
-                    } else {
-                        // احتياطي: ترميز Base64 القديم في حال فشل تحميل LZ-string
-                        const b64 = btoa(unescape(encodeURIComponent(JSON.stringify(compactCert))))
-                            .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-                        verifyUrl = `${verifyBaseUrl}?certNumber=${encodeURIComponent(certNum)}#d=${b64}`;
-                    }
+                    const verifyUrl = `${verifyBaseUrl}?certNumber=${encodeURIComponent(certNum)}`;
 
                     try {
-                        // نختار مستوى تصحيح الأخطاء حسب طول الرابط لضمان نجاح التوليد
-                        let level = QRCode.CorrectLevel.M;
-                        if (verifyUrl.length > 1500) level = QRCode.CorrectLevel.L;
                         new QRCode(document.getElementById("qrcode"), {
                             text: verifyUrl,
                             width: 256,
                             height: 256,
                             colorDark: "#000000",
                             colorLight: "#ffffff",
-                            correctLevel: level
+                            correctLevel: QRCode.CorrectLevel.H
                         });
                     } catch (qrError) {
-                        console.error('QR Code generation failed, falling back to URL without embedded data:', qrError);
-                        try {
-                            const fallbackUrl = `${verifyBaseUrl}?certNumber=${encodeURIComponent(certNum)}`;
-                            new QRCode(document.getElementById("qrcode"), {
-                                text: fallbackUrl,
-                                width: 256,
-                                height: 256,
-                                colorDark: "#000000",
-                                colorLight: "#ffffff",
-                                correctLevel: QRCode.CorrectLevel.M
-                            });
-                        } catch (e2) {
-                            console.error('Fallback QR generation failed too:', e2);
-                        }
+                        console.error('QR Code generation failed:', qrError);
                     }
                 } else {
                     alert('عذراً، لم يتم العثور على بيانات الشهادة.');
