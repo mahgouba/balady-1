@@ -28,22 +28,14 @@
     <script src="/assets/neon-serverless.js"></script>
     <script>
         // =================== NEON DB ===================
-        const NEON_CONNECTION_STRING = "postgresql://neondb_owner:npg_4fDRaepF6NLQ@ep-little-shape-antqb07h-pooler.c-6.us-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require";
+        const NEON_CONNECTION_STRING = "postgresql://neondb_owner:npg_4fDRaepF6NLQ@ep-little-shape-antqb07h-pooler.c-6.us-east-1.aws.neon.tech/neondb?sslmode=require";
         let sql = null;
         try {
             if (typeof neon !== 'undefined') {
                 const _client = neon.neon(NEON_CONNECTION_STRING);
-                sql = async (strings, ...values) => {
-                    let retries = 2;
-                    while (retries > 0) {
-                        try { return await _client(strings, ...values); }
-                        catch (err) {
-                            retries--;
-                            if (retries === 0) throw err;
-                            await new Promise(r => setTimeout(r, 300));
-                        }
-                    }
-                };
+                const withTimeout = (promise, ms) =>
+                    Promise.race([promise, new Promise((_, r) => setTimeout(() => r(new Error('timeout')), ms))]);
+                sql = (strings, ...values) => withTimeout(_client(strings, ...values), 5000);
             }
         } catch(e) { console.warn('Neon init failed:', e); }
 

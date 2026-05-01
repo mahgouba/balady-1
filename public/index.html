@@ -16,7 +16,7 @@
     <script src="/assets/neon-serverless.js" defer></script>
     <script>
         // Store connection string securely in memory (in a real app, this would be on a backend)
-        const NEON_CONNECTION_STRING = "postgresql://neondb_owner:npg_4fDRaepF6NLQ@ep-little-shape-antqb07h-pooler.c-6.us-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require";
+        const NEON_CONNECTION_STRING = "postgresql://neondb_owner:npg_4fDRaepF6NLQ@ep-little-shape-antqb07h-pooler.c-6.us-east-1.aws.neon.tech/neondb?sslmode=require";
         
         // Initialize Neon client with fast retry logic
         let sql;
@@ -168,6 +168,46 @@
 
                         databaseSetupComplete = true;
                         console.log('Database schema verified');
+
+                        // مزامنة تلقائية لشهادات LocalStorage إلى Neon (مرة واحدة فقط)
+                        if (!localStorage.getItem('neon_synced_v2')) {
+                            const localCerts = JSON.parse(localStorage.getItem('certificates') || '[]');
+                            if (localCerts.length > 0) {
+                                console.log(`مزامنة ${localCerts.length} شهادة إلى Neon...`);
+                                let synced = 0;
+                                for (const c of localCerts) {
+                                    if (!c.id) continue;
+                                    try {
+                                        await sql`
+                                            INSERT INTO certificates (
+                                                id, amanah, amanah_logo, municipality, municipality_logo,
+                                                name, id_number, gender, nationality, cert_number, job,
+                                                issue_date_hijri, issue_date_gregorian,
+                                                expiry_date_hijri, expiry_date_gregorian,
+                                                profile_image, establishment_name, establishment_number,
+                                                license_number, program_type, program_end_date
+                                            ) VALUES (
+                                                ${c.id}, ${c.amanah||''}, ${c.amanahLogo||''},
+                                                ${c.municipality||''}, ${c.municipalityLogo||''},
+                                                ${c.name||''}, ${c.idNumber||''}, ${c.gender||''},
+                                                ${c.nationality||''}, ${c.certNumber||c.id}, ${c.job||''},
+                                                ${c.issueDateHijri||''}, ${c.issueDateGregorian||''},
+                                                ${c.expiryDateHijri||''}, ${c.expiryDateGregorian||''},
+                                                ${c.profileImage||''}, ${c.establishmentName||''},
+                                                ${c.establishmentNumber||''}, ${c.licenseNumber||''},
+                                                ${c.programType||''}, ${c.programEndDate||''}
+                                            )
+                                            ON CONFLICT (id) DO NOTHING
+                                        `;
+                                        synced++;
+                                    } catch (e) {
+                                        console.warn('تخطي شهادة:', c.id, e.message);
+                                    }
+                                }
+                                console.log(`تمت مزامنة ${synced}/${localCerts.length} شهادة`);
+                            }
+                            localStorage.setItem('neon_synced_v2', Date.now());
+                        }
                     } catch (e) {
                         console.error('Database setup failed:', e);
                     }

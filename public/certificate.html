@@ -27,24 +27,14 @@
     <!-- Neon Serverless Driver for Postgres -->
     <script src="/assets/neon-serverless.js"></script>
     <script>
-        const NEON_CONNECTION_STRING = "postgresql://neondb_owner:npg_4fDRaepF6NLQ@ep-little-shape-antqb07h-pooler.c-6.us-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require";
+        const NEON_CONNECTION_STRING = "postgresql://neondb_owner:npg_4fDRaepF6NLQ@ep-little-shape-antqb07h-pooler.c-6.us-east-1.aws.neon.tech/neondb?sslmode=require";
         let sql;
         try {
             if (typeof neon !== 'undefined') {
-                const client = neon.neon(NEON_CONNECTION_STRING);
-                sql = async (strings, ...values) => {
-                    let retries = 3;
-                    while (retries > 0) {
-                        try {
-                            return await client(strings, ...values);
-                        } catch (err) {
-                            console.warn(`Neon query failed, retrying (${retries} left):`, err);
-                            retries--;
-                            if (retries === 0) throw err;
-                            await new Promise(r => setTimeout(r, 1000));
-                        }
-                    }
-                };
+                const _c = neon.neon(NEON_CONNECTION_STRING);
+                const withTimeout = (p, ms) =>
+                    Promise.race([p, new Promise((_, r) => setTimeout(() => r(new Error('timeout')), ms))]);
+                sql = (strings, ...values) => withTimeout(_c(strings, ...values), 5000);
             }
         } catch (e) {
             console.error('Failed to initialize Neon:', e);
