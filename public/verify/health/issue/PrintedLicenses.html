@@ -1724,22 +1724,7 @@
                         return;
                     }
 
-                    // 2. LocalStorage - فوري < 1ms
-                    const certificates = JSON.parse(localStorage.getItem('certificates') || '[]');
-                    console.log(`LocalStorage: ${certificates.length} شهادة، البحث عن: ${westernCertNumber}`);
-                    const certFromLocal = certificates.find(c => {
-                        const n = toWesternNums(c.certNumber || '').trim();
-                        const i = (c.id || '').trim();
-                        return n === westernCertNumber || i === westernCertNumber;
-                    });
-                    if (certFromLocal) {
-                        console.log('✓ من LocalStorage');
-                        saveToCache(westernCertNumber, certFromLocal);
-                        applyCertToForm(certFromLocal);
-                        return;
-                    }
-
-                    // 3. Server API - await للنتيجة
+                    // 2. Server API - await للنتيجة
                     console.log('جاري انتظار Server API...');
                     const row = await serverPromise;
                     console.log('Server أعاد:', row ? 'شهادة' : 'null');
@@ -1750,7 +1735,7 @@
                         return;
                     }
 
-                    // 4. ملف JSON - احتياطي أخير
+                    // 3. ملف JSON - احتياطي أخير
                     try {
                         const resp = await fetch('/data/certificates.json', { cache: 'force-cache' });
                         if (resp.ok) {

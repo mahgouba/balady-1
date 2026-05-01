@@ -1159,18 +1159,16 @@
         window.uploadJSONFile = uploadJSONFile;
 
         async function initApp() {
-            // One-time cleanup: remove old bloated localStorage keys to free quota
-            try {
-                localStorage.removeItem('certificates');
-                localStorage.removeItem('neon_synced_v2');
-            } catch (e) {}
-
             // Show UI immediately without waiting
             setInitialDates();
             document.getElementById('cert_certNumber').value = generateCertNumber();
             
-            // Load database in background
-            setupDatabase();
+            // Sync any local certs to server DB FIRST, then clean up localStorage
+            await setupDatabase();
+            try {
+                localStorage.removeItem('certificates');
+                localStorage.removeItem('neon_synced_v2');
+            } catch (e) {}
             
             // Load dropdown data and certificates in parallel
             Promise.all([
