@@ -8,7 +8,7 @@ const PORT = process.env.PORT || 5000;
 app.use(express.json({ limit: '25mb' }));
 app.use(express.static(path.join(__dirname, 'public'), { extensions: ['html'] }));
 
-const DB_URL = process.env.NEON_DATABASE_URL || process.env.DATABASE_URL;
+const DB_URL = process.env.DATABASE_URL || process.env.NEON_DATABASE_URL;
 const pool = new Pool({
     connectionString: DB_URL,
     ssl: DB_URL && DB_URL.includes('neon.tech')
