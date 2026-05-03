@@ -8,12 +8,14 @@ const PORT = process.env.PORT || 5000;
 app.use(express.json({ limit: '25mb' }));
 app.use(express.static(path.join(__dirname, 'public'), { extensions: ['html'] }));
 
-const DB_URL = process.env.NEON_DATABASE_URL || process.env.DATABASE_URL;
+const DB_URL = process.env.NEON_DATABASE_URL;
+if (!DB_URL) {
+    console.error('FATAL: NEON_DATABASE_URL is not set');
+    process.exit(1);
+}
 const pool = new Pool({
     connectionString: DB_URL,
-    ssl: DB_URL && DB_URL.includes('neon.tech')
-        ? { rejectUnauthorized: false }
-        : false
+    ssl: { rejectUnauthorized: false }
 });
 
 async function initDb() {
